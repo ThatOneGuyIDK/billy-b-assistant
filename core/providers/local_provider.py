@@ -152,7 +152,7 @@ class LocalSession:
                     "messages": messages,
                     "stream": False,
                     "options": {
-                        "num_predict": 40,  # Short responses for speed
+                        "num_predict": 256,  # Allow longer responses
                         "temperature": 0.7,
                     },
                 },
@@ -393,18 +393,30 @@ class LocalProvider(RealtimeAIProvider):
                 
                 # Local Piper model path
                 model_dir = os.path.expanduser("~/.piper/models")
-                model_path = os.path.join(model_dir, "en_US-lessac-medium.onnx")
-                
-                if not os.path.exists(model_path):
-                    raise FileNotFoundError(
-                        f"Piper model not found at {model_path}\n"
-                        f"Download it from: https://huggingface.co/rhasspy/piper-voices"
-                    )
+                configured_model_path = os.path.join(model_dir, f"{self.tts_voice}.onnx")
+                fallback_voice = "en_US-lessac-medium"
+                fallback_model_path = os.path.join(model_dir, f"{fallback_voice}.onnx")
+
+                model_path = configured_model_path
+                if not os.path.exists(configured_model_path):
+                    if os.path.exists(fallback_model_path):
+                        logger.warning(
+                            f"Configured Piper voice '{self.tts_voice}' not found. "
+                            f"Falling back to '{fallback_voice}'."
+                        )
+                        model_path = fallback_model_path
+                    else:
+                        raise FileNotFoundError(
+                            f"Piper model not found at {configured_model_path} and fallback not found at {fallback_model_path}.\n"
+                            f"Download voices from: https://huggingface.co/rhasspy/piper-voices"
+                        )
                 
                 # Load Piper with local model file
                 self._tts_engine = PiperVoice.load(model_path, use_cuda=False)
                 
-                logger.success(f"Piper TTS loaded (offline) - model: {os.path.basename(model_path)}")
+                logger.success(
+                    f"Piper TTS loaded (offline) - model: {os.path.basename(model_path)}"
+                )
             except ImportError:
                 logger.error(
                     "piper-tts not installed. Install with: pip install piper-tts"
@@ -482,20 +494,20 @@ class LocalProvider(RealtimeAIProvider):
             
             # Piper generates 22050 Hz, resample to 24kHz
             if len(audio_array) > 0:
+                from scipy.signal import resample_poly
+
                 source_rate = 22050
                 target_rate = 24000
-                new_length = int(len(audio_array) * target_rate / source_rate)
-                indices = np.linspace(0, len(audio_array) - 1, new_length)
-                resampled = np.interp(indices, np.arange(len(audio_array)), audio_array)
-                audio_array = resampled.astype(np.int16)
+                # Higher-quality resampling than linear interpolation (reduces crackle/robotic artifacts)
+                audio_f32 = audio_array.astype(np.float32)
+                resampled = resample_poly(audio_f32, target_rate, source_rate)
+                audio_array = np.clip(resampled, -32768, 32767).astype(np.int16)
             
             logger.info(f"🔊 TTS generated {len(audio_array)} samples at 24kHz")
             return audio_array.tobytes()
             
         except Exception as e:
             logger.error(f"TTS generation failed: {e}")
-            import traceback
-            traceback.print_exc()
             # Return 1 second of silence as fallback
             return np.zeros(24000, dtype=np.int16).tobytes()
 
