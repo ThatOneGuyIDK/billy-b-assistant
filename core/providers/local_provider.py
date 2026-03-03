@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import queue
+import re
 import wave
 from typing import Any, Optional
 
@@ -15,6 +16,37 @@ import requests
 
 from ..logger import logger
 from ..realtime_ai_provider import RealtimeAIProvider
+
+
+def _clean_tts_text(text: str) -> str:
+    """Clean text for TTS - remove formatting, limit length, remove problematic punctuation"""
+    # Remove markdown formatting
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # **bold** -> bold
+    text = re.sub(r'__(.+?)__', r'\1', text)  # __bold__ -> bold
+    text = re.sub(r'\*(.+?)\*', r'\1', text)  # *italic* -> italic
+    text = re.sub(r'_(.+?)_', r'\1', text)  # _italic_ -> italic
+    text = re.sub(r'`(.+?)`', r'\1', text)  # `code` -> code
+    
+    # Remove list markers and extra formatting
+    text = re.sub(r'^[\s]*[-*•]\s+', '', text, flags=re.MULTILINE)  # Remove bullet points
+    text = re.sub(r'^[\s]*\d+\.\s+', '', text, flags=re.MULTILINE)  # Remove numbered lists
+    text = re.sub(r'^[\s]*#+\s+', '', text, flags=re.MULTILINE)  # Remove markdown headers
+    
+    # Replace multiple newlines with space
+    text = re.sub(r'\n\n+', ' ', text)
+    text = re.sub(r'\n', ' ', text)
+    
+    # Remove all forbidden punctuation except periods
+    text = re.sub(r'[,;:!?\-()[\]{}"\'\`]', '', text)
+    
+    # Remove extra spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # Truncate to 50 words max to allow complete sentences
+    words = text.split()[:50]
+    text = ' '.join(words)
+    
+    return text
 
 
 class LocalSession:
@@ -133,8 +165,13 @@ class LocalSession:
         if not self.conversation_history:
             return
 
-        # Build messages
-        messages = [{"role": "system", "content": self.instructions}]
+        # Build messages with TTS optimization
+        from ..config import TTS_OPTIMIZATION_PROMPT
+        instructions_with_tts = self.instructions
+        if TTS_OPTIMIZATION_PROMPT:
+            instructions_with_tts += f"\n\n{TTS_OPTIMIZATION_PROMPT}"
+        
+        messages = [{"role": "system", "content": instructions_with_tts}]
         messages.extend(self.conversation_history)
 
         try:
@@ -152,8 +189,8 @@ class LocalSession:
                     "messages": messages,
                     "stream": False,
                     "options": {
-                        "num_predict": 256,  # Allow longer responses
-                        "temperature": 0.7,
+                        "num_predict": 150,  # Allow longer responses, text cleaning will limit to 25 words
+                        "temperature": 0.3,  # Lower temperature for more constrained output
                     },
                 },
                 timeout=(5, 300),  # Increased timeout for CPU inference
@@ -172,6 +209,12 @@ class LocalSession:
                 if not assistant_text:
                     logger.warning(f"Ollama returned empty text payload: {result}")
                     assistant_text = "I heard you, but I couldn't generate a response this time."
+                
+                # Clean text for TTS - remove formatting and enforce constraints
+                assistant_text = _clean_tts_text(assistant_text)
+                
+                if not assistant_text:
+                    assistant_text = "I heard you"
 
                 # Store in history
                 self.conversation_history.append(
@@ -350,8 +393,15 @@ class LocalProvider(RealtimeAIProvider):
         # Initialize TTS engine (lazy load)
         self._ensure_tts_loaded()
 
+        # For local provider, strip out function-calling instructions since Ollama can't call functions
+        # Only keep persona/personality instructions
+        simplified_instructions = instructions
+        if "=== SPECIAL POWERS ===" in simplified_instructions:
+            # Remove the TOOL_INSTRUCTIONS section, keep only persona
+            simplified_instructions = simplified_instructions.split("=== SPECIAL POWERS ===")[0].strip()
+        
         # Create and return session wrapper
-        session = LocalSession(self, instructions, tools)
+        session = LocalSession(self, simplified_instructions, tools)
 
         logger.success("Local provider connected and ready")
         return session

@@ -28,6 +28,13 @@ _config = configparser.ConfigParser()
 _config.read(PERSONA_PATH)
 
 # === Instructions for GPT ===
+TTS_OPTIMIZATION_PROMPT = ""
+try:
+    with open(os.path.join(ROOT_DIR, "core", "tts_optimization_prompt.txt"), "r") as f:
+        TTS_OPTIMIZATION_PROMPT = f.read()
+except:
+    TTS_OPTIMIZATION_PROMPT = ""
+
 TOOL_INSTRUCTIONS = """
 === SPECIAL POWERS ===
 

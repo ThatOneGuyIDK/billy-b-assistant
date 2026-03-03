@@ -151,6 +151,21 @@ def on_button():
                 return
 
         audio.ensure_playback_worker_started(config.CHUNK_MS)
+        
+        # Pre-load AI models before playing wake sound to avoid delay
+        logger.info("🔧 Pre-loading AI models...", "🔧")
+        try:
+            from .realtime_ai_provider import voice_provider_registry
+            provider = voice_provider_registry.get_provider()
+            if hasattr(provider, '_ensure_whisper_loaded'):
+                provider._ensure_whisper_loaded()
+                logger.success("✅ Whisper model loaded", "🔧")
+            if hasattr(provider, '_ensure_tts_loaded'):
+                provider._ensure_tts_loaded()
+                logger.success("✅ TTS model loaded", "🔧")
+        except Exception as e:
+            logger.warning(f"⚠️ Model pre-load failed (will retry later): {e}", "🔧")
+        
         # Clear the playback done event so session waits for wake-up sound
         audio.playback_done_event.clear()
         logger.info("🔧 playback_done_event cleared (waiting for wake-up sound)", "🔧")
