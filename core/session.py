@@ -1040,7 +1040,6 @@ class BillySession:
                     return
 
         if not TEXT_ONLY_MODE:
-            audio.playback_done_event.clear()
             audio.ensure_playback_worker_started(CHUNK_MS)
 
         await self.run_stream()
@@ -1069,7 +1068,12 @@ class BillySession:
             logger.info("Mic data now being sent (wake-up sound finished)", "🎤")
             self._mic_data_started = True
 
-        samples = indata[:, 0]
+        # Handle both mono (1D) and stereo (2D) input
+        if indata.ndim == 1:
+            samples = indata
+        else:
+            samples = indata[:, 0]
+        
         rms = np.sqrt(np.mean(np.square(samples.astype(np.float32))))
         self.last_rms = rms
 

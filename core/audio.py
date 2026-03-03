@@ -34,7 +34,7 @@ from .movements import (
 # === Audio Device Globals ===
 MIC_DEVICE_INDEX = None
 MIC_RATE = None
-MIC_CHANNELS = 2
+MIC_CHANNELS = 1  # Use mono for compatibility
 OUTPUT_DEVICE_INDEX = None
 OUTPUT_CHANNELS = 2
 OUTPUT_RATE = None
@@ -92,15 +92,16 @@ def detect_devices(debug=False):
             ):
                 MIC_DEVICE_INDEX = i
                 logger.success(f"Input device index {i} selected.")
-
-            MIC_CHANNELS = d['max_input_channels']
-            MIC_RATE = _pick_mic_rate(i, MIC_CHANNELS)
-            if MIC_RATE != PROVIDER_MIC_RATE:
-                logger.warning(
-                    f"Mic does not support {PROVIDER_MIC_RATE}Hz; "
-                    f"using {MIC_RATE}Hz and resampling to {PROVIDER_MIC_RATE}Hz."
-                )
-            CHUNK_SIZE = int(MIC_RATE * CHUNK_MS / 1000)
+                
+                # Always use mono (1 channel) for mic input
+                # MIC_CHANNELS stays at 1 for compatibility
+                MIC_RATE = _pick_mic_rate(i, MIC_CHANNELS)
+                if MIC_RATE != PROVIDER_MIC_RATE:
+                    logger.warning(
+                        f"Mic does not support {PROVIDER_MIC_RATE}Hz; "
+                        f"using {MIC_RATE}Hz and resampling to {PROVIDER_MIC_RATE}Hz."
+                    )
+                CHUNK_SIZE = int(MIC_RATE * CHUNK_MS / 1000)
 
         if OUTPUT_DEVICE_INDEX is None and d['max_output_channels'] > 0:
             if (

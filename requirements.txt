@@ -10,5 +10,10 @@ requests
 openai
 aiohttp
 flask
-lgpio
+# lgpio - skipped for laptop testing, GPIO is auto-mocked
 packaging
+
+# Local AI Provider Dependencies (optional)
+# Uncomment to enable local-only operation without OpenAI
+# faster-whisper
+# ollama-python

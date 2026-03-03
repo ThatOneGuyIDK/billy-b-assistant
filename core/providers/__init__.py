@@ -10,11 +10,20 @@ from ..config import OPENAI_API_KEY, OPENAI_MODEL, REALTIME_AI_PROVIDER, XAI_API
 from ..realtime_ai_provider import voice_provider_registry
 from .openai_provider import OpenAIProvider
 from .xai_provider import XAIProvider
+from .local_provider import LocalProvider
 
 
 logger.verbose(f"OPENAI_API_KEY set: {bool(OPENAI_API_KEY)}")
 logger.verbose(f"XAI_API_KEY set: {bool(XAI_API_KEY)}")
 logger.verbose(f"REALTIME_AI_PROVIDER: {REALTIME_AI_PROVIDER}")
+
+# Always register local provider (no API key needed)
+try:
+    local_provider = LocalProvider()
+    voice_provider_registry.register_provider(local_provider)
+    logger.success("Local provider registered (Ollama + Whisper + TTS)")
+except Exception as e:
+    logger.warning(f"Could not register local provider: {e}")
 
 if OPENAI_API_KEY:
     openai_provider = OpenAIProvider(api_key=OPENAI_API_KEY, model=OPENAI_MODEL)
@@ -38,24 +47,6 @@ elif OPENAI_API_KEY and XAI_API_KEY:
     )
     voice_provider_registry.set_default_provider("openai")
 else:
-    # No API keys are set - provide helpful error message with diagnostics
-    env_exists = os.path.exists(ENV_PATH) if ENV_PATH else False
-    env_path_info = (
-        f"Expected .env path: {ENV_PATH}" if ENV_PATH else "ENV_PATH not set"
-    )
-    env_exists_info = (
-        f"File exists: {env_exists}" if ENV_PATH else "Cannot check - ENV_PATH not set"
-    )
-    openai_from_env = os.getenv("OPENAI_API_KEY", "")
-    xai_from_env = os.getenv("XAI_API_KEY", "")
-
-    error_msg = (
-        "At least one provider API key must be set!\n"
-        f"  {env_path_info}\n"
-        f"  {env_exists_info}\n"
-        f"  OPENAI_API_KEY from os.getenv: {'set' if openai_from_env else 'not set'}\n"
-        f"  XAI_API_KEY from os.getenv: {'set' if xai_from_env else 'not set'}\n"
-        f"  Please check your .env file and ensure it contains OPENAI_API_KEY or XAI_API_KEY"
-    )
-    # Never hard-fail on missing API keys; log a warning so services still start.
-    logger.warning(error_msg)
+    # No API keys - default to local provider
+    logger.info("No API keys configured - defaulting to local provider")
+    voice_provider_registry.set_default_provider("local")
