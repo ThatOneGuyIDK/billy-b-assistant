@@ -151,13 +151,26 @@ class LocalSession:
                     "model": self.provider.ollama_model,
                     "messages": messages,
                     "stream": False,
+                    "options": {
+                        "num_predict": 128,
+                    },
                 },
-                timeout=30,
+                timeout=(5, 180),
             )
 
             if response.status_code == 200:
                 result = response.json()
-                assistant_text = result.get("message", {}).get("content", "")
+                assistant_text = (
+                    result.get("message", {}).get("content")
+                    or result.get("response")
+                    or result.get("text")
+                    or ""
+                )
+                assistant_text = assistant_text.strip()
+
+                if not assistant_text:
+                    logger.warning(f"Ollama returned empty text payload: {result}")
+                    assistant_text = "I heard you, but I couldn't generate a response this time."
 
                 # Store in history
                 self.conversation_history.append(
@@ -168,6 +181,12 @@ class LocalSession:
                 await self._send_message({
                     "type": "response.text.delta",
                     "delta": assistant_text,
+                })
+
+                # Send text done (helps clients that rely on done events)
+                await self._send_message({
+                    "type": "response.text.done",
+                    "text": assistant_text,
                 })
 
                 # Generate audio from text
@@ -195,7 +214,13 @@ class LocalSession:
                 })
 
             else:
-                logger.error(f"Ollama error: {response.status_code}")
+                error_msg = f"Ollama error: {response.status_code}"
+                try:
+                    error_body = response.json()
+                    error_msg += f" - {error_body}"
+                except:
+                    error_msg += f" - {response.text}"
+                logger.error(error_msg)
                 await self._send_message({
                     "type": "error",
                     "error": {"message": f"Ollama error: {response.status_code}"},
@@ -224,7 +249,7 @@ class LocalProvider(RealtimeAIProvider):
     def __init__(
         self,
         ollama_host: str = "http://localhost:11434",
-        ollama_model: str = "llama3.2:latest",
+        ollama_model: str = "llama2:latest",
         whisper_model: str = "base",
         tts_voice: str = "en_US-lessac-medium",
     ):
@@ -365,14 +390,34 @@ class LocalProvider(RealtimeAIProvider):
 
         try:
             # Convert raw PCM to numpy array
-            audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
-            audio_np = audio_np / 32768.0  # Normalize to [-1, 1]
+            audio_i16 = np.frombuffer(audio_bytes, dtype=np.int16)
+            if audio_i16.size == 0:
+                return ""
 
-            # Transcribe with Whisper
-            segments, _ = self._whisper_model.transcribe(audio_np, language="en")
-            text = " ".join([segment.text for segment in segments])
+            # Skip near-silence/noise to avoid random hallucinated words
+            peak = int(np.max(np.abs(audio_i16)))
+            rms = float(np.sqrt(np.mean(np.square(audio_i16.astype(np.float32)))))
+            if peak < 80 and rms < 3.0:
+                logger.info(
+                    f"Whisper skipped: audio too quiet (peak={peak}, rms={rms:.2f})"
+                )
+                return ""
 
-            return text.strip()
+            audio_np = audio_i16.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
+
+            # Transcribe with Whisper (more stable settings)
+            segments, _ = self._whisper_model.transcribe(
+                audio_np,
+                language="en",
+                beam_size=5,
+                best_of=5,
+                temperature=0.0,
+                vad_filter=True,
+                condition_on_previous_text=False,
+            )
+            text = " ".join([segment.text for segment in segments]).strip()
+
+            return text
         except Exception as e:
             logger.error(f"Speech-to-text failed: {e}")
             return ""

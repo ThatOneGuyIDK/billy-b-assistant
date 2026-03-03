@@ -1225,10 +1225,12 @@ class BillySession:
                         f"No mic activity for {MIC_TIMEOUT_SECONDS}s. Ending input...",
                         "⏱️",
                     )
-                    # Send commit to process buffered audio before timing out
-                    await self._ws_send_json({"type": "input_audio_buffer.commit"})
-                    await asyncio.sleep(0.5)  # Give provider time to process
-                    await self.stop_session()
+                    # Commit captured audio, then pause mic and wait for assistant response.
+                    if not self.committed:
+                        await self._ws_send_json({"type": "input_audio_buffer.commit"})
+                        self.committed = True
+                    self._stop_mic()
+                    logger.info("Waiting for assistant response...", "⏳")
                     break
 
             await asyncio.sleep(0.5)
