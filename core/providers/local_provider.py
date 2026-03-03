@@ -78,22 +78,29 @@ class LocalSession:
             audio_b64 = payload.get("audio", "")
             if audio_b64:
                 self.audio_buffer.append(audio_b64)
+                if len(self.audio_buffer) <= 1:  # Log first chunk only
+                    logger.info(f"🎙️ LocalSession: Received audio buffer, total chunks: {len(self.audio_buffer)}", "🔊")
 
         elif msg_type == "input_audio_buffer.commit":
             # Transcribe accumulated audio
+            logger.info(f"🔧 Commit received with {len(self.audio_buffer)} audio chunks", "🔧")
             if self.audio_buffer:
                 audio_data = b"".join(
                     [base64.b64decode(chunk) for chunk in self.audio_buffer]
                 )
+                logger.info(f"🔧 Audio data size: {len(audio_data)} bytes", "🔧")
                 
                 # Send commit event
                 await self._send_message({"type": "input_audio_buffer.committed"})
                 
                 # Transcribe
+                logger.info("🔧 Calling Whisper for transcription...", "🔧")
                 text = await self.provider._speech_to_text(audio_data)
+                logger.info(f"🔧 Whisper returned: '{text}'", "🔧")
                 
                 if text:
                     # Send transcription event
+                    logger.info(f"📝 Sending transcription: {text}", "📝")
                     await self._send_message({
                         "type": "conversation.item.input_audio_transcription.completed",
                         "transcript": text,
@@ -101,8 +108,12 @@ class LocalSession:
                     
                     # Store for LLM
                     self.conversation_history.append({"role": "user", "content": text})
+                else:
+                    logger.warning("⚠️ Whisper returned empty text", "⚠️")
                 
                 self.audio_buffer = []
+            else:
+                logger.warning("⚠️ Commit received but audio buffer is empty", "⚠️")
 
         elif msg_type == "response.create":
             # Generate LLM response

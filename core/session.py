@@ -1153,6 +1153,12 @@ class BillySession:
             return
         if t == "input_audio_buffer.speech_stopped":
             return
+        if t == "conversation.item.input_audio_transcription.completed":
+            # User's speech has been transcribed, now generate LLM response
+            transcript = data.get("transcript", "")
+            logger.info(f"📝 User said: {transcript}", "📝")
+            await self._ws_send_json({"type": "response.create"})
+            return
         if t in self.TRANSCRIPT_DONE_TYPES:
             self._on_transcript_done(data)
             return
@@ -1219,6 +1225,9 @@ class BillySession:
                         f"No mic activity for {MIC_TIMEOUT_SECONDS}s. Ending input...",
                         "⏱️",
                     )
+                    # Send commit to process buffered audio before timing out
+                    await self._ws_send_json({"type": "input_audio_buffer.commit"})
+                    await asyncio.sleep(0.5)  # Give provider time to process
                     await self.stop_session()
                     break
 
