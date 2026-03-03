@@ -6,7 +6,7 @@ from ..logger import logger
 
 logger.verbose("Importing core.providers")
 # Register realtime AI providers
-from ..config import OPENAI_API_KEY, OPENAI_MODEL, REALTIME_AI_PROVIDER, XAI_API_KEY, OLLAMA_MODEL
+from ..config import OPENAI_API_KEY, OPENAI_MODEL, REALTIME_AI_PROVIDER, XAI_API_KEY, OLLAMA_MODEL, WHISPER_MODEL
 from ..realtime_ai_provider import voice_provider_registry
 from .openai_provider import OpenAIProvider
 from .xai_provider import XAIProvider
@@ -19,7 +19,7 @@ logger.verbose(f"REALTIME_AI_PROVIDER: {REALTIME_AI_PROVIDER}")
 
 # Always register local provider (no API key needed)
 try:
-    local_provider = LocalProvider(ollama_model=OLLAMA_MODEL)
+    local_provider = LocalProvider(ollama_model=OLLAMA_MODEL, whisper_model=WHISPER_MODEL)
     voice_provider_registry.register_provider(local_provider)
     logger.success("Local provider registered (Ollama + Whisper + TTS)")
 except Exception as e:

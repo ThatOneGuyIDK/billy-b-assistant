@@ -216,6 +216,7 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 
 # === Local Provider Config ===
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama2:latest")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 
 # === Provider Config ===
 REALTIME_AI_PROVIDER = os.getenv("REALTIME_AI_PROVIDER", None)

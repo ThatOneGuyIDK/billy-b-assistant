@@ -427,7 +427,7 @@ class LocalProvider(RealtimeAIProvider):
             # Skip near-silence/noise to avoid random hallucinated words
             peak = int(np.max(np.abs(audio_i16)))
             rms = float(np.sqrt(np.mean(np.square(audio_i16.astype(np.float32)))))
-            if peak < 80 and rms < 3.0:
+            if peak < 80 and rms < 1.0:
                 logger.info(
                     f"Whisper skipped: audio too quiet (peak={peak}, rms={rms:.2f})"
                 )
@@ -435,18 +435,19 @@ class LocalProvider(RealtimeAIProvider):
 
             audio_np = audio_i16.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
 
-            # Transcribe with Whisper (more stable settings)
+            # Transcribe with Whisper - improved settings for accuracy
             segments, _ = self._whisper_model.transcribe(
                 audio_np,
                 language="en",
-                beam_size=5,
-                best_of=5,
-                temperature=0.0,
-                vad_filter=True,
-                condition_on_previous_text=False,
+                beam_size=10,  # Increased for better accuracy
+                best_of=10,    # Increased for better accuracy
+                temperature=0.0,  # Deterministic output
+                vad_filter=True,  # Filter silence
+                condition_on_previous_text=False,  # Don't hallucinate
             )
             text = " ".join([segment.text for segment in segments]).strip()
 
+            logger.debug(f"Whisper transcribed: '{text}'")
             return text
         except Exception as e:
             logger.error(f"Speech-to-text failed: {e}")
