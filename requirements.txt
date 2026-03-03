@@ -17,3 +17,4 @@ packaging
 # Uncomment to enable local-only operation without OpenAI
 # faster-whisper
 # ollama-python
+# piper-tts

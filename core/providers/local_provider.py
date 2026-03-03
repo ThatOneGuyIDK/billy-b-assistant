@@ -152,10 +152,11 @@ class LocalSession:
                     "messages": messages,
                     "stream": False,
                     "options": {
-                        "num_predict": 128,
+                        "num_predict": 40,  # Short responses for speed
+                        "temperature": 0.7,
                     },
                 },
-                timeout=(5, 180),
+                timeout=(5, 300),  # Increased timeout for CPU inference
             )
 
             if response.status_code == 200:
@@ -194,15 +195,22 @@ class LocalSession:
                     assistant_text, self.provider.voice
                 )
 
-                if audio_bytes:
+                logger.info(f"🔊 Audio bytes returned: {len(audio_bytes) if audio_bytes else 0} bytes")
+
+                if audio_bytes and len(audio_bytes) > 0:
                     # Send audio in chunks
                     chunk_size = 4800  # 100ms at 24kHz
+                    num_chunks = 0
                     for i in range(0, len(audio_bytes), chunk_size):
                         chunk = audio_bytes[i : i + chunk_size]
                         await self._send_message({
-                            "type": "response.audio.delta",
+                            "type": "response.output_audio.delta",
                             "delta": base64.b64encode(chunk).decode("utf-8"),
                         })
+                        num_chunks += 1
+                    logger.info(f"🔊 Sent {num_chunks} audio chunks")
+                else:
+                    logger.warning("🔊 No audio data to send")
 
                 # Send response.done
                 await self._send_message({
@@ -379,10 +387,32 @@ class LocalProvider(RealtimeAIProvider):
     def _ensure_tts_loaded(self):
         """Lazy load TTS engine"""
         if self._tts_engine is None:
-            # TODO: Initialize Piper TTS or alternative
-            # For now, we'll use a placeholder
-            logger.warning("TTS engine not yet implemented - using placeholder")
-            self._tts_engine = "placeholder"
+            try:
+                from piper import PiperVoice
+                import os
+                
+                # Local Piper model path
+                model_dir = os.path.expanduser("~/.piper/models")
+                model_path = os.path.join(model_dir, "en_US-lessac-medium.onnx")
+                
+                if not os.path.exists(model_path):
+                    raise FileNotFoundError(
+                        f"Piper model not found at {model_path}\n"
+                        f"Download it from: https://huggingface.co/rhasspy/piper-voices"
+                    )
+                
+                # Load Piper with local model file
+                self._tts_engine = PiperVoice.load(model_path, use_cuda=False)
+                
+                logger.success(f"Piper TTS loaded (offline) - model: {os.path.basename(model_path)}")
+            except ImportError:
+                logger.error(
+                    "piper-tts not installed. Install with: pip install piper-tts"
+                )
+                raise
+            except Exception as e:
+                logger.error(f"Failed to load Piper TTS: {e}")
+                raise
 
     async def _speech_to_text(self, audio_bytes: bytes) -> str:
         """Convert audio to text using Whisper"""
@@ -423,20 +453,50 @@ class LocalProvider(RealtimeAIProvider):
             return ""
 
     async def _text_to_speech(self, text: str, voice: str) -> bytes:
-        """Convert text to audio using local TTS"""
+        """Convert text to audio using offline Piper TTS"""
         self._ensure_tts_loaded()
 
-        # TODO: Implement Piper TTS integration
-        # For now, return silence as placeholder
-        logger.warning("TTS not yet fully implemented - returning placeholder audio")
-
-        # Generate 1 second of silence as placeholder
-        sample_rate = 24000
-        duration = 1.0
-        samples = int(sample_rate * duration)
-        audio_data = np.zeros(samples, dtype=np.int16)
-
-        return audio_data.tobytes()
+        try:
+            logger.debug(f"Generating TTS for: {text[:50]}...")
+            
+            # Generate audio chunks from Piper
+            audio_chunks = []
+            
+            for chunk in self._tts_engine.synthesize(text):
+                # chunk.audio_int16_bytes is the raw PCM audio at the model's native rate
+                audio_bytes = chunk.audio_int16_bytes
+                logger.debug(f"Piper chunk: {len(audio_bytes)} bytes at {chunk.sample_rate}Hz")
+                audio_chunks.append(audio_bytes)
+            
+            # Concatenate all audio chunks
+            if not audio_chunks:
+                logger.warning("No audio generated from Piper")
+                return np.zeros(24000, dtype=np.int16).tobytes()
+            
+            combined_audio = b''.join(audio_chunks)
+            logger.info(f"🔊 Combined audio: {len(combined_audio)} bytes")
+            
+            # Convert to numpy array
+            audio_array = np.frombuffer(combined_audio, dtype=np.int16)
+            
+            # Piper generates 22050 Hz, resample to 24kHz
+            if len(audio_array) > 0:
+                source_rate = 22050
+                target_rate = 24000
+                new_length = int(len(audio_array) * target_rate / source_rate)
+                indices = np.linspace(0, len(audio_array) - 1, new_length)
+                resampled = np.interp(indices, np.arange(len(audio_array)), audio_array)
+                audio_array = resampled.astype(np.int16)
+            
+            logger.info(f"🔊 TTS generated {len(audio_array)} samples at 24kHz")
+            return audio_array.tobytes()
+            
+        except Exception as e:
+            logger.error(f"TTS generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return 1 second of silence as fallback
+            return np.zeros(24000, dtype=np.int16).tobytes()
 
     # ==================== WebSocket Compatibility Methods ====================
 

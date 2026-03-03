@@ -214,6 +214,9 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-realtime-mini")
 # === XAI Config ===
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 
+# === Local Provider Config ===
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama2:latest")
+
 # === Provider Config ===
 REALTIME_AI_PROVIDER = os.getenv("REALTIME_AI_PROVIDER", None)
 
@@ -235,7 +238,7 @@ BILLY_PINS = os.getenv("BILLY_PINS", "new").strip().lower()
 SPEAKER_PREFERENCE = os.getenv("SPEAKER_PREFERENCE")
 MIC_PREFERENCE = os.getenv("MIC_PREFERENCE")
 MIC_TIMEOUT_SECONDS = int(os.getenv("MIC_TIMEOUT_SECONDS", "5"))
-SILENCE_THRESHOLD = float(os.getenv("SILENCE_THRESHOLD", "1000"))
+SILENCE_THRESHOLD = float(os.getenv("SILENCE_THRESHOLD", "0.3"))  # RMS threshold for detecting speech
 CHUNK_MS = int(os.getenv("CHUNK_MS", "40"))
 PLAYBACK_VOLUME = 1
 MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))

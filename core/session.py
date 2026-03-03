@@ -249,6 +249,7 @@ class BillySession:
         self.full_response_text = ""
         self.last_rms = 0.0
         self.last_activity = [time.time()]
+        self.first_audio_received = False  # Track if we've heard any audio yet
         self.session_active = asyncio.Event()
         self.user_spoke_after_assistant = False
         self.allow_mic_input = True
@@ -1081,6 +1082,9 @@ class BillySession:
             print(f"\r🎙️ Mic Volume: {rms:.1f}", end="", flush=True)
 
         if rms > SILENCE_THRESHOLD:
+            if not self.first_audio_received:
+                self.first_audio_received = True
+                logger.info("Audio detected! Listening...")
             self.last_activity[0] = time.time()
             self.user_spoke_after_assistant = True
 
@@ -1197,6 +1201,11 @@ class BillySession:
         while self.session_active.is_set():
             if not self.mic_running:
                 await asyncio.sleep(0.2)
+                continue
+
+            # Only count timeout after we've received audio
+            if not self.first_audio_received:
+                await asyncio.sleep(0.5)
                 continue
 
             now = time.time()
