@@ -269,6 +269,9 @@ def playback_worker(chunk_ms):
                                 continue
                             flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                             stream.write(_resample_24k_mono_to_48k_stereo(sub))
+                            
+                            # Small delay to prevent USB audio buffer overflow
+                            time.sleep(0.001)
 
                             interlude_counter += len(sub)
                             interlude_counter, interlude_target = (
@@ -287,6 +290,9 @@ def playback_worker(chunk_ms):
                             continue
                         flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                         stream.write(_resample_24k_mono_to_48k_stereo(sub))
+                        
+                        # Small delay to prevent USB audio buffer overflow
+                        time.sleep(0.001)
 
                         interlude_counter += len(sub)
                         interlude_counter, interlude_target = _maybe_trigger_interlude(
