@@ -130,8 +130,16 @@ def on_button():
                     session_thread.join(timeout=2.0)
                     if session_thread.is_alive():
                         logger.warning("Session thread did not finish in time", "⚠️")
+                        # If the session thread is stuck, release start lock so user can start fresh
+                        with contextlib.suppress(Exception):
+                            if _session_start_lock.locked():
+                                _session_start_lock.release()
         is_active = False  # ✅ Ensure this is always set after stopping
-        return
+        # In mock mode, one Enter should be enough to reset and start listening again.
+        # On real hardware, keep existing behavior (press once to stop).
+        if not config.MOCKFISH:
+            return
+
 
     # Use lock to prevent concurrent session starts (but allow interruption above)
     if not _session_start_lock.acquire(blocking=False):
@@ -169,7 +177,8 @@ def on_button():
         # Clear the playback done event so session waits for wake-up sound
         audio.playback_done_event.clear()
         logger.info("🔧 playback_done_event cleared (waiting for wake-up sound)", "🔧")
-        threading.Thread(target=audio.play_random_wake_up_clip, daemon=True).start()
+        logger.info("🔔 Playing wake-up sound before opening mic...", "🔔")
+        audio.play_random_wake_up_clip()
         is_active = True
         interrupt_event = threading.Event()  # Fresh event for each session
         logger.info("Button pressed. Listening...", "🎤")

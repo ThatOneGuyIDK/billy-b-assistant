@@ -41,11 +41,32 @@ def _clean_tts_text(text: str) -> str:
     
     # Remove extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Truncate to 50 words max to allow complete sentences
-    words = text.split()[:50]
-    text = ' '.join(words)
-    
+
+    # Enforce concise responses while avoiding mid-sentence cutoffs
+    max_words = 50
+    sentences = [s.strip() for s in text.split('.') if s.strip()]
+    kept_sentences = []
+    total_words = 0
+
+    for sentence in sentences:
+        sentence_words = sentence.split()
+        if total_words + len(sentence_words) <= max_words:
+            kept_sentences.append(sentence)
+            total_words += len(sentence_words)
+        else:
+            break
+
+    if kept_sentences:
+        text = '. '.join(kept_sentences).strip()
+    else:
+        # Fallback: hard truncate only if first sentence is already too long
+        text = ' '.join(text.split()[:max_words]).strip()
+
+    # Ensure clean ending for TTS
+    text = text.rstrip("'\"-_,;:")
+    if text and not text.endswith('.'):
+        text += '.'
+
     return text
 
 
@@ -63,6 +84,7 @@ class LocalSession:
         self.audio_buffer = []
         self.message_queue = asyncio.Queue()
         self.closed = False
+        self._close_sentinel = {"type": "__session_closed__"}
 
     async def send(self, message: str):
         """Receive messages from session.py"""
@@ -75,6 +97,8 @@ class LocalSession:
     async def recv(self):
         """Send messages back to session.py"""
         message = await self.message_queue.get()
+        if message == self._close_sentinel:
+            raise StopAsyncIteration
         return json.dumps(message)
 
     def __aiter__(self):
@@ -86,11 +110,18 @@ class LocalSession:
         if self.closed and self.message_queue.empty():
             raise StopAsyncIteration
         message = await self.message_queue.get()
+        if message == self._close_sentinel:
+            raise StopAsyncIteration
         return json.dumps(message)
 
     async def close(self):
         """Close the session"""
         self.closed = True
+        # Unblock any pending queue consumers (async for / recv)
+        try:
+            self.message_queue.put_nowait(self._close_sentinel)
+        except Exception:
+            pass
 
     async def wait_closed(self):
         """Wait for session to close (compatibility with websocket)"""
