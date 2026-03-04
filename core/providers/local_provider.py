@@ -222,8 +222,9 @@ class LocalSession:
                     "messages": messages,
                     "stream": False,
                     "options": {
-                        "num_predict": 150,
-                        "temperature": 0.3,
+                        "num_predict": 80,  # Reduced from 150 for faster responses
+                        "temperature": 0.4,  # Slightly higher for faster generation
+                        "num_ctx": 2048,  # Limit context window
                     },
                 },
                 timeout=(5, 300),

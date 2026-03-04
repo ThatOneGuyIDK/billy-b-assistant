@@ -18,6 +18,7 @@ from . import movements
 from .config import (
     CHUNK_MS,
     MIC_PREFERENCE,
+    PLAYBACK_LATENCY,
     PLAYBACK_VOLUME,
     SPEAKER_PREFERENCE,
     TEXT_ONLY_MODE,
@@ -185,10 +186,19 @@ def playback_worker(chunk_ms):
     next_beat_time = 0
 
     try:
+        # Calculate blocksize for stable USB audio playback
+        # Larger blocks = more stable but higher latency
+        blocksize = int(48000 * PLAYBACK_LATENCY)
+        
         with sd.OutputStream(
-            samplerate=48000, channels=2, dtype='int16', device=OUTPUT_DEVICE_INDEX
+            samplerate=48000,
+            channels=2,
+            dtype='int16',
+            device=OUTPUT_DEVICE_INDEX,
+            latency=PLAYBACK_LATENCY,
+            blocksize=blocksize,
         ) as stream:
-            logger.info("Output stream opened", "🔈")
+            logger.info(f"Output stream opened (latency={PLAYBACK_LATENCY}s, blocksize={blocksize})", "🔈")
             while True:
                 item = playback_queue.get()
                 now = time.time()

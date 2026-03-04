@@ -249,6 +249,7 @@ MIC_PREFERENCE = os.getenv("MIC_PREFERENCE")
 MIC_TIMEOUT_SECONDS = int(os.getenv("MIC_TIMEOUT_SECONDS", "5"))
 SILENCE_THRESHOLD = float(os.getenv("SILENCE_THRESHOLD", "0.3"))  # RMS threshold for detecting speech
 CHUNK_MS = int(os.getenv("CHUNK_MS", "40"))
+PLAYBACK_LATENCY = float(os.getenv("PLAYBACK_LATENCY", "0.3"))  # USB audio buffer latency in seconds
 PLAYBACK_VOLUME = 1
 MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))
 TURN_EAGERNESS = os.getenv("TURN_EAGERNESS", "high").strip().lower()

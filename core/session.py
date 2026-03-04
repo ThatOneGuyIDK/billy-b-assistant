@@ -351,18 +351,25 @@ class BillySession:
         audio_b64 = data.get("audio") or data.get("delta")
         if audio_b64:
             audio_chunk = base64.b64decode(audio_b64)
-            # Clear queue of any remaining thinking sounds before adding response
-            # This ensures response audio plays immediately without waiting for queued thinking sounds
-            if not self.audio_buffer:  # Only clear on first audio chunk
+            
+            # Track audio in buffer
+            self.audio_buffer.extend(audio_chunk)
+            self.last_activity[0] = time.time()
+            
+            # On first chunk, clear thinking sounds then start response playback
+            if len(self.audio_buffer) == len(audio_chunk):  # First chunk only
+                logger.debug("First audio chunk - clearing thinking sounds from queue")
+                cleared = 0
                 while not audio.playback_queue.empty():
                     try:
                         audio.playback_queue.get_nowait()
                         audio.playback_queue.task_done()
+                        cleared += 1
                     except Exception:
                         break
+                logger.debug(f"Cleared {cleared} thinking sound chunks")
             
-            self.audio_buffer.extend(audio_chunk)
-            self.last_activity[0] = time.time()
+            # Always enqueue response audio
             audio.playback_queue.put(audio_chunk)
 
             if self.interrupt_event.is_set():
@@ -767,8 +774,8 @@ class BillySession:
         if TEXT_ONLY_MODE:
             return
         self.stop_thinking_sounds = False
-        # Enqueue 8 thinking sounds (~4.3 seconds) - short enough that we can clear quickly
-        for _ in range(8):
+        # Enqueue 15 thinking sounds (~8 seconds) - covers Ollama + TTS generation time
+        for _ in range(15):
             audio.enqueue_thinking_tone(duration_ms=180, frequency_hz=700.0)
 
     def _stop_thinking_sound(self):
