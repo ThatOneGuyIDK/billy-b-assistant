@@ -14,6 +14,7 @@ from typing import Any, Optional
 import numpy as np
 import requests
 
+from ..config import DEBUG_MODE
 from ..logger import logger
 from ..realtime_ai_provider import RealtimeAIProvider
 
@@ -179,8 +180,8 @@ class LocalSession:
                 logger.warning("⚠️ Commit received but audio buffer is empty", "⚠️")
 
         elif msg_type == "response.create":
-            # Generate LLM response
-            await self._generate_response()
+            # Generate LLM response in background so message loop can continue
+            asyncio.create_task(self._generate_response())
 
         elif msg_type == "conversation.item.create":
             # Handle text input

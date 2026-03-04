@@ -101,16 +101,6 @@ def _load_thinking_sound_pcm(max_ms: int = 220) -> bytes | None:
             target_len = int(len(audio_i16) * PROVIDER_OUTPUT_RATE / sample_rate)
             audio_i16 = resample(audio_i16.astype(np.float32), target_len).astype(np.int16)
 
-        # Keep indicator short and unobtrusive
-        max_samples = int(PROVIDER_OUTPUT_RATE * (max_ms / 1000.0))
-        if len(audio_i16) > max_samples:
-            audio_i16 = audio_i16[:max_samples]
-
-        # Normalize to a modest level
-        peak = int(np.max(np.abs(audio_i16))) if len(audio_i16) else 0
-        if peak > 0:
-            audio_i16 = np.clip(audio_i16.astype(np.float32) * (1800.0 / peak), -32768, 32767).astype(np.int16)
-
         _thinking_sound_cache = audio_i16.tobytes()
         _thinking_sound_mtime = mtime
         logger.info(f"Loaded custom thinking sound: {THINKING_SOUND_FILE}", "🫧")

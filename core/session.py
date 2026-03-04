@@ -257,8 +257,7 @@ class BillySession:
         self.mic = MicManager()
         self.mic_running = False
         self.mic_timeout_task: asyncio.Task | None = None
-        self.thinking_sound_task: asyncio.Task | None = None
-        self.waiting_for_response_audio = False
+        self.stop_thinking_sounds = False  # Flag to stop enqueueing thinking sounds
 
         # Track whenever a session is updated after creation, and OpenAI is ready to receive voice.
         self.session_initialized = False
@@ -342,14 +341,26 @@ class BillySession:
             logger.info(f"Transcript completed: {transcript!r}", "📝")
 
     def _on_audio_out(self, data: dict[str, Any]):
-        if TEXT_ONLY_MODE:
-            return
-        # Assistant started speaking; stop the thinking indicator immediately.
+        # Stop enqueueing more thinking sounds
         self._stop_thinking_sound()
         self._turn_had_speech = True
+        
+        if TEXT_ONLY_MODE:
+            return
+        
         audio_b64 = data.get("audio") or data.get("delta")
         if audio_b64:
             audio_chunk = base64.b64decode(audio_b64)
+            # Clear queue of any remaining thinking sounds before adding response
+            # This ensures response audio plays immediately without waiting for queued thinking sounds
+            if not self.audio_buffer:  # Only clear on first audio chunk
+                while not audio.playback_queue.empty():
+                    try:
+                        audio.playback_queue.get_nowait()
+                        audio.playback_queue.task_done()
+                    except Exception:
+                        break
+            
             self.audio_buffer.extend(audio_chunk)
             self.last_activity[0] = time.time()
             audio.playback_queue.put(audio_chunk)
@@ -752,33 +763,17 @@ class BillySession:
             await self.stop_session()
 
     def _start_thinking_sound(self):
-        """Start periodic thinking tone while waiting for assistant response audio."""
+        """Enqueue thinking sounds while waiting for response."""
         if TEXT_ONLY_MODE:
             return
-        self.waiting_for_response_audio = True
-        if self.thinking_sound_task and not self.thinking_sound_task.done():
-            return
-        self.thinking_sound_task = asyncio.create_task(self._thinking_sound_loop())
+        self.stop_thinking_sounds = False
+        # Enqueue 20 thinking sounds (~11 seconds of looping)
+        for _ in range(20):
+            audio.enqueue_thinking_tone(duration_ms=180, frequency_hz=700.0)
 
     def _stop_thinking_sound(self):
-        """Stop periodic thinking tone."""
-        self.waiting_for_response_audio = False
-        if self.thinking_sound_task and not self.thinking_sound_task.done():
-            self.thinking_sound_task.cancel()
-        self.thinking_sound_task = None
-
-    async def _thinking_sound_loop(self):
-        """Play a quiet repeating tone while waiting for the model to start speaking."""
-        try:
-            # Small initial delay so fast responses don't get an unnecessary beep.
-            await asyncio.sleep(0.35)
-            while self.session_active.is_set() and self.waiting_for_response_audio:
-                # Never stack over existing playback and never play while speaking.
-                if audio.playback_queue.empty() and not self._turn_had_speech:
-                    audio.enqueue_thinking_tone(duration_ms=100, frequency_hz=700.0)
-                await asyncio.sleep(0.55)
-        except asyncio.CancelledError:
-            pass
+        """Stop enqueueing more thinking sounds (response is arriving)."""
+        self.stop_thinking_sounds = True
 
     # ---- Mic helpers -------------------------------------------------
     def _start_mic(self, *, retry=True):
