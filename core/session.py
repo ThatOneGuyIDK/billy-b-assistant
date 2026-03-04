@@ -1198,8 +1198,12 @@ class BillySession:
             # User's speech has been transcribed, now generate LLM response
             transcript = data.get("transcript", "")
             logger.info(f"📝 User said: {transcript}", "📝")
-            self._start_thinking_sound()
+            # Thinking sound already started earlier
             await self._ws_send_json({"type": "response.create"})
+            return
+        if t == "response.thinking_started":
+            # Start thinking sound immediately after mic stops, before transcription
+            self._start_thinking_sound()
             return
         if t in self.TRANSCRIPT_DONE_TYPES:
             self._on_transcript_done(data)

@@ -157,6 +157,9 @@ class LocalSession:
                 # Send commit event
                 await self._send_message({"type": "input_audio_buffer.committed"})
                 
+                # Start thinking sound BEFORE transcription to eliminate awkward silence
+                await self._send_message({"type": "response.thinking_started"})
+                
                 # Transcribe
                 logger.info("🔧 Calling Whisper for transcription...", "🔧")
                 text = await self.provider._speech_to_text(audio_data)
