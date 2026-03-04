@@ -767,8 +767,8 @@ class BillySession:
         if TEXT_ONLY_MODE:
             return
         self.stop_thinking_sounds = False
-        # Enqueue 20 thinking sounds (~11 seconds of looping)
-        for _ in range(20):
+        # Enqueue 8 thinking sounds (~4.3 seconds) - short enough that we can clear quickly
+        for _ in range(8):
             audio.enqueue_thinking_tone(duration_ms=180, frequency_hz=700.0)
 
     def _stop_thinking_sound(self):
