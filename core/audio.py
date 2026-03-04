@@ -42,6 +42,7 @@ CHUNK_SIZE = None
 WAKE_UP_DIR = "sounds/wake-up/custom"
 WAKE_UP_DIR_DEFAULT = "sounds/wake-up/default"
 RESPONSE_HISTORY_DIR = "sounds/response-history"
+THINKING_SOUND_FILE = "sounds/thinking/bubble.wav"
 os.makedirs(RESPONSE_HISTORY_DIR, exist_ok=True)
 
 playback_queue = Queue()
@@ -57,6 +58,66 @@ song_tail_threshold = 1500
 
 PROVIDER_MIC_RATE = 24000
 PROVIDER_OUTPUT_RATE = 24000
+
+_thinking_sound_cache: bytes | None = None
+_thinking_sound_mtime: float = -1.0
+
+
+def _load_thinking_sound_pcm(max_ms: int = 220) -> bytes | None:
+    """Load and cache custom thinking sound as 24kHz mono 16-bit PCM bytes."""
+    global _thinking_sound_cache, _thinking_sound_mtime
+
+    if not os.path.exists(THINKING_SOUND_FILE):
+        return None
+
+    try:
+        mtime = os.path.getmtime(THINKING_SOUND_FILE)
+        if _thinking_sound_cache is not None and mtime == _thinking_sound_mtime:
+            return _thinking_sound_cache
+
+        with wave.open(THINKING_SOUND_FILE, "rb") as wf:
+            channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+            sample_rate = wf.getframerate()
+            frames = wf.readframes(wf.getnframes())
+
+        if sample_width == 2:
+            audio_i16 = np.frombuffer(frames, dtype=np.int16)
+        elif sample_width == 1:
+            # Convert unsigned 8-bit PCM to signed int16
+            audio_u8 = np.frombuffer(frames, dtype=np.uint8).astype(np.int16)
+            audio_i16 = (audio_u8 - 128) << 8
+        else:
+            logger.warning(
+                f"Thinking sound sample width {sample_width} not supported; using synthetic bubble.",
+                "⚠️",
+            )
+            return None
+
+        if channels > 1 and len(audio_i16) >= channels:
+            audio_i16 = audio_i16.reshape(-1, channels).mean(axis=1).astype(np.int16)
+
+        if sample_rate != PROVIDER_OUTPUT_RATE and len(audio_i16) > 0:
+            target_len = int(len(audio_i16) * PROVIDER_OUTPUT_RATE / sample_rate)
+            audio_i16 = resample(audio_i16.astype(np.float32), target_len).astype(np.int16)
+
+        # Keep indicator short and unobtrusive
+        max_samples = int(PROVIDER_OUTPUT_RATE * (max_ms / 1000.0))
+        if len(audio_i16) > max_samples:
+            audio_i16 = audio_i16[:max_samples]
+
+        # Normalize to a modest level
+        peak = int(np.max(np.abs(audio_i16))) if len(audio_i16) else 0
+        if peak > 0:
+            audio_i16 = np.clip(audio_i16.astype(np.float32) * (1800.0 / peak), -32768, 32767).astype(np.int16)
+
+        _thinking_sound_cache = audio_i16.tobytes()
+        _thinking_sound_mtime = mtime
+        logger.info(f"Loaded custom thinking sound: {THINKING_SOUND_FILE}", "🫧")
+        return _thinking_sound_cache
+    except Exception as e:
+        logger.warning(f"Failed to load custom thinking sound: {e}", "⚠️")
+        return None
 
 
 def _pick_mic_rate(device_index: int, channels: int, preferred_rate=PROVIDER_MIC_RATE):
@@ -335,6 +396,36 @@ def enqueue_wav_to_playback(filepath):
             if not frames:
                 break
             playback_queue.put(frames)
+
+
+def enqueue_thinking_tone(duration_ms: int = 140, frequency_hz: float = 420.0):
+    """Enqueue a short bubble/plop-like sound used as a 'thinking' indicator."""
+    custom_pcm = _load_thinking_sound_pcm()
+    if custom_pcm:
+        playback_queue.put(custom_pcm)
+        return
+
+    sample_count = max(1, int(PROVIDER_OUTPUT_RATE * (duration_ms / 1000.0)))
+    t = np.arange(sample_count, dtype=np.float32) / float(PROVIDER_OUTPUT_RATE)
+
+    # Bubble-like chirp: descending frequency + fast attack/decay envelope.
+    f0 = float(frequency_hz)
+    f1 = max(140.0, f0 * 0.45)
+    sweep = f0 + (f1 - f0) * (t / max(t[-1], 1e-6))
+    phase = 2 * np.pi * np.cumsum(sweep) / float(PROVIDER_OUTPUT_RATE)
+
+    # Add a tiny bit of filtered noise to make it feel "watery".
+    noise = np.random.normal(0.0, 0.08, size=sample_count).astype(np.float32)
+
+    # Envelope: quick attack, then smooth decay.
+    attack_len = max(1, int(sample_count * 0.08))
+    attack = np.linspace(0.0, 1.0, attack_len, dtype=np.float32)
+    decay = np.exp(-6.0 * np.linspace(0.0, 1.0, sample_count - attack_len, dtype=np.float32))
+    env = np.concatenate([attack, decay])
+
+    bubble = (0.85 * np.sin(phase) + 0.25 * np.sin(2.0 * phase) + noise) * env
+    bubble_i16 = np.clip(bubble * 2200.0, -32768, 32767).astype(np.int16)
+    playback_queue.put(bubble_i16.tobytes())
 
 
 def play_random_wake_up_clip():

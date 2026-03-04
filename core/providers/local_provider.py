@@ -212,19 +212,20 @@ class LocalSession:
                 "response": {"id": "resp_local"}
             })
 
-            # Call Ollama
-            response = requests.post(
+            # Call Ollama (in a worker thread so event loop can keep running thinking indicator)
+            response = await asyncio.to_thread(
+                requests.post,
                 f"{self.provider.ollama_host}/api/chat",
                 json={
                     "model": self.provider.ollama_model,
                     "messages": messages,
                     "stream": False,
                     "options": {
-                        "num_predict": 150,  # Allow longer responses, text cleaning will limit to 25 words
-                        "temperature": 0.3,  # Lower temperature for more constrained output
+                        "num_predict": 150,
+                        "temperature": 0.3,
                     },
                 },
-                timeout=(5, 300),  # Increased timeout for CPU inference
+                timeout=(5, 300),
             )
 
             if response.status_code == 200:
@@ -546,33 +547,33 @@ class LocalProvider(RealtimeAIProvider):
             logger.error(f"Speech-to-text failed: {e}")
             return ""
 
-    async def _text_to_speech(self, text: str, voice: str) -> bytes:
-        """Convert text to audio using offline Piper TTS"""
+    def _text_to_speech_blocking(self, text: str, voice: str) -> bytes:
+        """Blocking TTS synthesis helper (runs in a worker thread)."""
         self._ensure_tts_loaded()
 
         try:
             logger.debug(f"Generating TTS for: {text[:50]}...")
-            
+
             # Generate audio chunks from Piper
             audio_chunks = []
-            
+
             for chunk in self._tts_engine.synthesize(text):
                 # chunk.audio_int16_bytes is the raw PCM audio at the model's native rate
                 audio_bytes = chunk.audio_int16_bytes
                 logger.debug(f"Piper chunk: {len(audio_bytes)} bytes at {chunk.sample_rate}Hz")
                 audio_chunks.append(audio_bytes)
-            
+
             # Concatenate all audio chunks
             if not audio_chunks:
                 logger.warning("No audio generated from Piper")
                 return np.zeros(24000, dtype=np.int16).tobytes()
-            
+
             combined_audio = b''.join(audio_chunks)
             logger.info(f"🔊 Combined audio: {len(combined_audio)} bytes")
-            
+
             # Convert to numpy array
             audio_array = np.frombuffer(combined_audio, dtype=np.int16)
-            
+
             # Piper generates 22050 Hz, resample to 24kHz
             if len(audio_array) > 0:
                 from scipy.signal import resample_poly
@@ -583,14 +584,18 @@ class LocalProvider(RealtimeAIProvider):
                 audio_f32 = audio_array.astype(np.float32)
                 resampled = resample_poly(audio_f32, target_rate, source_rate)
                 audio_array = np.clip(resampled, -32768, 32767).astype(np.int16)
-            
+
             logger.info(f"🔊 TTS generated {len(audio_array)} samples at 24kHz")
             return audio_array.tobytes()
-            
+
         except Exception as e:
             logger.error(f"TTS generation failed: {e}")
             # Return 1 second of silence as fallback
             return np.zeros(24000, dtype=np.int16).tobytes()
+
+    async def _text_to_speech(self, text: str, voice: str) -> bytes:
+        """Convert text to audio using offline Piper TTS."""
+        return await asyncio.to_thread(self._text_to_speech_blocking, text, voice)
 
     # ==================== WebSocket Compatibility Methods ====================
 

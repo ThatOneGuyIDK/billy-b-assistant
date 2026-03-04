@@ -257,6 +257,8 @@ class BillySession:
         self.mic = MicManager()
         self.mic_running = False
         self.mic_timeout_task: asyncio.Task | None = None
+        self.thinking_sound_task: asyncio.Task | None = None
+        self.waiting_for_response_audio = False
 
         # Track whenever a session is updated after creation, and OpenAI is ready to receive voice.
         self.session_initialized = False
@@ -342,6 +344,8 @@ class BillySession:
     def _on_audio_out(self, data: dict[str, Any]):
         if TEXT_ONLY_MODE:
             return
+        # Assistant started speaking; stop the thinking indicator immediately.
+        self._stop_thinking_sound()
         self._turn_had_speech = True
         audio_b64 = data.get("audio") or data.get("delta")
         if audio_b64:
@@ -688,6 +692,7 @@ class BillySession:
             return
 
     async def _on_response_done(self, data: dict[str, Any]):
+        self._stop_thinking_sound()
         error = data.get("status_details", {}).get("error")
         if error:
             error_type = error.get("type")
@@ -745,6 +750,35 @@ class BillySession:
         if self.run_mode == "dory":
             logger.info("Dory mode active. Ending session after single response.", "🎣")
             await self.stop_session()
+
+    def _start_thinking_sound(self):
+        """Start periodic thinking tone while waiting for assistant response audio."""
+        if TEXT_ONLY_MODE:
+            return
+        self.waiting_for_response_audio = True
+        if self.thinking_sound_task and not self.thinking_sound_task.done():
+            return
+        self.thinking_sound_task = asyncio.create_task(self._thinking_sound_loop())
+
+    def _stop_thinking_sound(self):
+        """Stop periodic thinking tone."""
+        self.waiting_for_response_audio = False
+        if self.thinking_sound_task and not self.thinking_sound_task.done():
+            self.thinking_sound_task.cancel()
+        self.thinking_sound_task = None
+
+    async def _thinking_sound_loop(self):
+        """Play a quiet repeating tone while waiting for the model to start speaking."""
+        try:
+            # Small initial delay so fast responses don't get an unnecessary beep.
+            await asyncio.sleep(0.35)
+            while self.session_active.is_set() and self.waiting_for_response_audio:
+                # Never stack over existing playback and never play while speaking.
+                if audio.playback_queue.empty() and not self._turn_had_speech:
+                    audio.enqueue_thinking_tone(duration_ms=100, frequency_hz=700.0)
+                await asyncio.sleep(0.55)
+        except asyncio.CancelledError:
+            pass
 
     # ---- Mic helpers -------------------------------------------------
     def _start_mic(self, *, retry=True):
@@ -1136,6 +1170,7 @@ class BillySession:
 
         finally:
             try:
+                self._stop_thinking_sound()
                 self._stop_mic()
                 logger.info("Mic stream closed.", "🎙️")
             except Exception as e:
@@ -1161,6 +1196,7 @@ class BillySession:
             # User's speech has been transcribed, now generate LLM response
             transcript = data.get("transcript", "")
             logger.info(f"📝 User said: {transcript}", "📝")
+            self._start_thinking_sound()
             await self._ws_send_json({"type": "response.create"})
             return
         if t in self.TRANSCRIPT_DONE_TYPES:
@@ -1308,6 +1344,7 @@ class BillySession:
 
     async def stop_session(self):
         logger.info("Stopping session...", "🛑")
+        self._stop_thinking_sound()
 
         # Increment interaction count for current user at end of session
         user_manager.increment_current_user_interaction_count()

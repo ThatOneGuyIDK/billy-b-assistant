@@ -178,7 +178,7 @@ def on_button():
         audio.playback_done_event.clear()
         logger.info("🔧 playback_done_event cleared (waiting for wake-up sound)", "🔧")
         logger.info("🔔 Playing wake-up sound before opening mic...", "🔔")
-        audio.play_random_wake_up_clip()
+        threading.Thread(target=audio.play_random_wake_up_clip, daemon=True).start()
         is_active = True
         interrupt_event = threading.Event()  # Fresh event for each session
         logger.info("Button pressed. Listening...", "🎤")
