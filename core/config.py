@@ -250,7 +250,7 @@ MIC_TIMEOUT_SECONDS = int(os.getenv("MIC_TIMEOUT_SECONDS", "5"))
 SILENCE_THRESHOLD = float(os.getenv("SILENCE_THRESHOLD", "0.3"))  # RMS threshold for detecting speech
 CHUNK_MS = int(os.getenv("CHUNK_MS", "40"))
 PLAYBACK_LATENCY = float(os.getenv("PLAYBACK_LATENCY", "0.5"))  # USB audio buffer latency in seconds (0.5s recommended for Pi)
-USE_APLAY = os.getenv("USE_APLAY", "auto").lower()  # "auto" = use aplay on Linux, "true" = force aplay, "false" = force sounddevice
+USE_APLAY = os.getenv("USE_APLAY", "false").lower()  # "true" = use aplay subprocess, "false" = use sounddevice (default)
 PLAYBACK_VOLUME = 1
 MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))
 TURN_EAGERNESS = os.getenv("TURN_EAGERNESS", "high").strip().lower()

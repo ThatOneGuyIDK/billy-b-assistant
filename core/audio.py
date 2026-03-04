@@ -306,7 +306,12 @@ def playback_worker(chunk_ms):
                 last_played_time = time.time()
 
     except Exception as e:
-        logger.error(f"Playback stream failed: {e}")
+        # Check if it's a benign ALSA error that occurs after successful playback
+        error_str = str(e).lower()
+        if "alsa" in error_str or "paerrorcode -9999" in error_str:
+            logger.verbose(f"ALSA cleanup error (audio likely played successfully): {e}")
+        else:
+            logger.error(f"Playback stream failed: {e}")
     finally:
         playback_done_event.set()
 
@@ -318,6 +323,8 @@ def playback_worker_aplay(chunk_ms):
 
     interlude_counter = 0
     interlude_target = random.randint(150000, 300000)
+    aplay_failure_count = 0
+    max_failures = 3
     
     # Determine aplay device parameter
     aplay_device = None
@@ -325,24 +332,29 @@ def playback_worker_aplay(chunk_ms):
         # Use hw:CARD,DEV format for direct hardware access
         aplay_device = f"plughw:{OUTPUT_DEVICE_INDEX},0"
     
+    logger.info(f"Aplay playback started (device={aplay_device or 'default'})", "🔈")
+    
+    def _play_audio_chunk(audio_data):
+        """Play a single audio chunk through aplay."""
+        try:
+            cmd = ["aplay", "-f", "S16_LE", "-r", "48000", "-c", "2", "-t", "raw", "-q"]
+            if aplay_device:
+                cmd.extend(["-D", aplay_device])
+            
+            # Create new process for this chunk
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            proc.communicate(input=audio_data, timeout=5)
+            return True
+        except Exception as e:
+            logger.verbose(f"Aplay chunk playback error: {e}")
+            return False
+    
     try:
-        # Start aplay process in pipe mode
-        # Format: 48kHz, stereo (2 channels), 16-bit little-endian signed
-        cmd = ["aplay", "-f", "S16_LE", "-r", "48000", "-c", "2", "-t", "raw"]
-        if aplay_device:
-            cmd.extend(["-D", aplay_device])
-        
-        # Use a large buffer for aplay to prevent underruns
-        cmd.extend(["--buffer-size=65536"])
-        
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        logger.info(f"Aplay playback started (device={aplay_device or 'default'})", "🔈")
-        
         while True:
             item = playback_queue.get()
             now = time.time()
@@ -351,7 +363,21 @@ def playback_worker_aplay(chunk_ms):
                 logger.info("Received stop signal, cleaning up.", "🧵")
                 playback_queue.task_done()
                 break
+            
+            # Check if aplay is failing too much - fall back to sounddevice
+            if aplay_failure_count >= max_failures:
+                logger.warning(f"Aplay failed {aplay_failure_count} times, falling back to sounddevice", "⚠️")
+                playback_queue.task_done()
+                # Re-enqueue remaining items and switch to sounddevice
+                playback_queue.put(item)
+                playback_done_event.set()
+                # Start sounddevice worker instead
+                threading.Thread(target=playback_worker, args=(chunk_ms,), daemon=True).start()
+                return
 
+            # Collect all audio data for this item
+            audio_buffer = bytearray()
+            
             if isinstance(item, tuple):
                 mode = item[0]
                 if mode == "song":
@@ -365,7 +391,7 @@ def playback_worker_aplay(chunk_ms):
 
                     mono = np.frombuffer(audio_chunk, dtype=np.int16)
                     stereo = _resample_24k_mono_to_48k_stereo(mono)
-                    proc.stdin.write(stereo.tobytes())
+                    audio_buffer.extend(stereo.tobytes())
 
                 elif mode == "tts":
                     chunk = item[1]
@@ -377,7 +403,7 @@ def playback_worker_aplay(chunk_ms):
                             continue
                         flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                         stereo = _resample_24k_mono_to_48k_stereo(sub)
-                        proc.stdin.write(stereo.tobytes())
+                        audio_buffer.extend(stereo.tobytes())
 
                         interlude_counter += len(sub)
                         interlude_counter, interlude_target = (
@@ -396,39 +422,33 @@ def playback_worker_aplay(chunk_ms):
                         continue
                     flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                     stereo = _resample_24k_mono_to_48k_stereo(sub)
-                    proc.stdin.write(stereo.tobytes())
+                    audio_buffer.extend(stereo.tobytes())
 
                     interlude_counter += len(sub)
                     interlude_counter, interlude_target = _maybe_trigger_interlude(
                         interlude_counter, interlude_target
                     )
 
-            proc.stdin.flush()
+            # Play the collected audio
+            if len(audio_buffer) > 0:
+                success = _play_audio_chunk(bytes(audio_buffer))
+                if not success:
+                    aplay_failure_count += 1
+                else:
+                    aplay_failure_count = max(0, aplay_failure_count - 1)  # Decay failure count on success
+
             playback_queue.task_done()
             last_played_time = time.time()
 
     except Exception as e:
         logger.error(f"Aplay playback failed: {e}")
     finally:
-        try:
-            if proc and proc.stdin:
-                proc.stdin.close()
-            if proc:
-                proc.wait(timeout=2)
-        except:
-            pass
         playback_done_event.set()
 
 
 def _should_use_aplay():
     """Determine if aplay should be used for playback."""
-    if USE_APLAY == "true":
-        return True
-    elif USE_APLAY == "false":
-        return False
-    else:  # "auto"
-        # Use aplay on Linux for better USB audio stability
-        return platform.system() == "Linux"
+    return USE_APLAY == "true"
 
 
 def ensure_playback_worker_started(chunk_ms):
