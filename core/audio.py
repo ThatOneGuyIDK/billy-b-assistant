@@ -3,7 +3,9 @@ import base64
 import glob
 import json
 import os
+import platform
 import random
+import subprocess
 import sys
 import threading
 import time
@@ -22,6 +24,7 @@ from .config import (
     PLAYBACK_VOLUME,
     SPEAKER_PREFERENCE,
     TEXT_ONLY_MODE,
+    USE_APLAY,
 )
 from .logger import logger
 from .movements import (
@@ -308,13 +311,141 @@ def playback_worker(chunk_ms):
         playback_done_event.set()
 
 
+def playback_worker_aplay(chunk_ms):
+    """Alternative playback worker using aplay subprocess for more reliable USB audio on Linux."""
+    global last_played_time
+    global song_start_time
+
+    interlude_counter = 0
+    interlude_target = random.randint(150000, 300000)
+    
+    # Determine aplay device parameter
+    aplay_device = None
+    if OUTPUT_DEVICE_INDEX is not None:
+        # Use hw:CARD,DEV format for direct hardware access
+        aplay_device = f"plughw:{OUTPUT_DEVICE_INDEX},0"
+    
+    try:
+        # Start aplay process in pipe mode
+        # Format: 48kHz, stereo (2 channels), 16-bit little-endian signed
+        cmd = ["aplay", "-f", "S16_LE", "-r", "48000", "-c", "2", "-t", "raw"]
+        if aplay_device:
+            cmd.extend(["-D", aplay_device])
+        
+        # Use a large buffer for aplay to prevent underruns
+        cmd.extend(["--buffer-size=65536"])
+        
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logger.info(f"Aplay playback started (device={aplay_device or 'default'})", "🔈")
+        
+        while True:
+            item = playback_queue.get()
+            now = time.time()
+
+            if item is None:
+                logger.info("Received stop signal, cleaning up.", "🧵")
+                playback_queue.task_done()
+                break
+
+            if isinstance(item, tuple):
+                mode = item[0]
+                if mode == "song":
+                    audio_chunk, flap_chunk, rms_drums = item[1], item[2], item[3]
+
+                    flap_from_pcm_chunk(
+                        np.frombuffer(flap_chunk, dtype=np.int16),
+                        threshold=song_mouth_threshold,
+                        chunk_ms=chunk_ms,
+                    )
+
+                    mono = np.frombuffer(audio_chunk, dtype=np.int16)
+                    stereo = _resample_24k_mono_to_48k_stereo(mono)
+                    proc.stdin.write(stereo.tobytes())
+
+                elif mode == "tts":
+                    chunk = item[1]
+                    mono = np.frombuffer(chunk, dtype=np.int16)
+                    chunk_len = int(PROVIDER_OUTPUT_RATE * chunk_ms / 1000)
+                    for i in range(0, len(mono), chunk_len):
+                        sub = mono[i : i + chunk_len]
+                        if len(sub) == 0:
+                            continue
+                        flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                        stereo = _resample_24k_mono_to_48k_stereo(sub)
+                        proc.stdin.write(stereo.tobytes())
+
+                        interlude_counter += len(sub)
+                        interlude_counter, interlude_target = (
+                            _maybe_trigger_interlude(
+                                interlude_counter, interlude_target
+                            )
+                        )
+
+            else:
+                chunk = item
+                mono = np.frombuffer(chunk, dtype=np.int16)
+                chunk_len = int(PROVIDER_OUTPUT_RATE * chunk_ms / 1000)
+                for i in range(0, len(mono), chunk_len):
+                    sub = mono[i : i + chunk_len]
+                    if len(sub) == 0:
+                        continue
+                    flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                    stereo = _resample_24k_mono_to_48k_stereo(sub)
+                    proc.stdin.write(stereo.tobytes())
+
+                    interlude_counter += len(sub)
+                    interlude_counter, interlude_target = _maybe_trigger_interlude(
+                        interlude_counter, interlude_target
+                    )
+
+            proc.stdin.flush()
+            playback_queue.task_done()
+            last_played_time = time.time()
+
+    except Exception as e:
+        logger.error(f"Aplay playback failed: {e}")
+    finally:
+        try:
+            if proc and proc.stdin:
+                proc.stdin.close()
+            if proc:
+                proc.wait(timeout=2)
+        except:
+            pass
+        playback_done_event.set()
+
+
+def _should_use_aplay():
+    """Determine if aplay should be used for playback."""
+    if USE_APLAY == "true":
+        return True
+    elif USE_APLAY == "false":
+        return False
+    else:  # "auto"
+        # Use aplay on Linux for better USB audio stability
+        return platform.system() == "Linux"
+
+
 def ensure_playback_worker_started(chunk_ms):
     global _playback_thread
     if TEXT_ONLY_MODE:
         return
     if not _playback_thread or not _playback_thread.is_alive():
+        # Choose playback method based on platform and config
+        if _should_use_aplay():
+            worker_func = playback_worker_aplay
+            logger.info("Using aplay for audio playback (more reliable for USB audio)", "🎵")
+        else:
+            worker_func = playback_worker
+            logger.info("Using sounddevice for audio playback", "🎵")
+        
         _playback_thread = threading.Thread(
-            target=playback_worker, args=(chunk_ms,), daemon=True
+            target=worker_func, args=(chunk_ms,), daemon=True
         )
         _playback_thread.start()
 
