@@ -10,6 +10,10 @@ from .movements import move_head, move_tail
 
 
 try:
+    # Force lgpio pin factory before importing Button
+    import os
+    os.environ['GPIOZERO_PIN_FACTORY'] = 'lgpio'
+    
     from gpiozero import Button
 
     gpiozero_available = True
