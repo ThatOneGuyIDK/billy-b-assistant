@@ -239,5 +239,17 @@ def start_loop():
             pass
     else:
         logger.info("Listening for real GPIO button press on pin 24...", "🔘")
+        button_was_pressed = False
         while True:
-            time.sleep(0.1)
+            try:
+                # Poll button state instead of relying on callbacks
+                if button.is_pressed and not button_was_pressed:
+                    logger.info("🔘 Button press detected (GPIO 24)", "🔘")
+                    on_button()
+                    button_was_pressed = True
+                elif not button.is_pressed:
+                    button_was_pressed = False
+                time.sleep(0.05)  # Poll every 50ms
+            except Exception as e:
+                logger.error(f"Button polling error: {e}")
+                time.sleep(0.1)
