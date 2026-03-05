@@ -93,9 +93,6 @@ def on_button():
         return  # Ignore very quick repeat presses (debounce)
     last_button_time = now
 
-    if not button.is_pressed:
-        return
-
     if is_active:
         logger.info("Button pressed during active session.", "🔁")
         interrupt_event.set()
@@ -236,10 +233,11 @@ def start_loop():
         try:
             while True:
                 input("Press Enter to simulate button press: ")
-                button.is_pressed = True
+                logger.info("🔘 Button press detected (simulated)", "🔘")
                 on_button()
         except KeyboardInterrupt:
             pass
     else:
+        logger.info("Listening for real GPIO button press on pin 24...", "🔘")
         while True:
             time.sleep(0.1)
