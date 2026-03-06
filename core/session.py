@@ -1267,15 +1267,18 @@ class BillySession:
                     flush=True,
                 )
 
-                if now - last_tail_move > 1.0:
-                    move_tail_async(duration=0.2)
-                    last_tail_move = now
+                # Disabled tail movement during timeout to avoid noise feedback loop
+                # if now - last_tail_move > 1.0:
+                #     move_tail_async(duration=0.2)
+                #     last_tail_move = now
 
                 if elapsed > MIC_TIMEOUT_SECONDS:
                     logger.info(
                         f"No mic activity for {MIC_TIMEOUT_SECONDS}s. Ending input...",
                         "⏱️",
                     )
+                    # Move tail now that timeout triggered
+                    move_tail_async(duration=0.2)
                     # Commit captured audio, then pause mic and wait for assistant response.
                     if not self.committed:
                         await self._ws_send_json({"type": "input_audio_buffer.commit"})
