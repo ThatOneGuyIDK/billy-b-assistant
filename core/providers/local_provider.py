@@ -222,103 +222,145 @@ class LocalSession:
                 "response": {"id": "resp_local"}
             })
 
-            # Call Ollama (in a worker thread so event loop can keep running thinking indicator)
-            response = await asyncio.to_thread(
-                requests.post,
-                f"{self.provider.ollama_host}/api/chat",
-                json={
-                    "model": self.provider.ollama_model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {
-                        "num_predict": 80,  # Reduced from 150 for faster responses
-                        "temperature": 0.4,  # Slightly higher for faster generation
-                        "num_ctx": 2048,  # Limit context window
-                    },
-                },
-                timeout=(5, 300),
-            )
+            def _pop_ready_sentence(buf: str):
+                for i, ch in enumerate(buf):
+                    if ch in ".!?" and (i + 1 == len(buf) or buf[i + 1].isspace()):
+                        return buf[: i + 1], buf[i + 1 :].lstrip()
+                return None, buf
 
-            if response.status_code == 200:
-                result = response.json()
-                assistant_text = (
-                    result.get("message", {}).get("content")
-                    or result.get("response")
-                    or result.get("text")
-                    or ""
-                )
-                assistant_text = assistant_text.strip()
+            async def _send_tts_for_text(text_piece: str) -> int:
+                cleaned = _clean_tts_text(text_piece)
+                if not cleaned:
+                    return 0
+                audio_bytes = await self.provider._text_to_speech(cleaned, self.provider.voice)
+                if not audio_bytes:
+                    return 0
 
-                if not assistant_text:
-                    logger.warning(f"Ollama returned empty text payload: {result}")
-                    assistant_text = "I heard you, but I couldn't generate a response this time."
-                
-                # Clean text for TTS - remove formatting and enforce constraints
-                assistant_text = _clean_tts_text(assistant_text)
-                
-                if not assistant_text:
-                    assistant_text = "I heard you"
-
-                # Store in history
-                self.conversation_history.append(
-                    {"role": "assistant", "content": assistant_text}
-                )
-
-                # Send text delta
-                await self._send_message({
-                    "type": "response.text.delta",
-                    "delta": assistant_text,
-                })
-
-                # Send text done (helps clients that rely on done events)
-                await self._send_message({
-                    "type": "response.text.done",
-                    "text": assistant_text,
-                })
-
-                # Generate audio from text
-                audio_bytes = await self.provider._text_to_speech(
-                    assistant_text, self.provider.voice
-                )
-
-                logger.info(f"🔊 Audio bytes returned: {len(audio_bytes) if audio_bytes else 0} bytes")
-
-                if audio_bytes and len(audio_bytes) > 0:
-                    # Send audio in chunks
-                    chunk_size = 9600  # 200ms at 24kHz (fewer boundaries, smoother playback)
-                    num_chunks = 0
-                    for i in range(0, len(audio_bytes), chunk_size):
-                        chunk = audio_bytes[i : i + chunk_size]
-                        await self._send_message({
+                chunk_size = 9600  # 200ms at 24kHz
+                sent = 0
+                for i in range(0, len(audio_bytes), chunk_size):
+                    chunk = audio_bytes[i : i + chunk_size]
+                    await self._send_message(
+                        {
                             "type": "response.output_audio.delta",
                             "delta": base64.b64encode(chunk).decode("utf-8"),
-                        })
-                        num_chunks += 1
-                    logger.info(f"🔊 Sent {num_chunks} audio chunks")
-                else:
-                    logger.warning("🔊 No audio data to send")
+                        }
+                    )
+                    sent += 1
+                return sent
 
-                # Send response.done
-                await self._send_message({
+            delta_queue: asyncio.Queue = asyncio.Queue()
+            stream_done = object()
+            stream_error: dict[str, Any] = {"message": ""}
+            loop = asyncio.get_running_loop()
+
+            def _stream_ollama():
+                try:
+                    with requests.post(
+                        f"{self.provider.ollama_host}/api/chat",
+                        json={
+                            "model": self.provider.ollama_model,
+                            "messages": messages,
+                            "stream": True,
+                            "options": {
+                                "num_predict": 180,  # Longer responses while still reasonably fast
+                                "temperature": 0.5,
+                                "num_ctx": 2048,
+                            },
+                        },
+                        stream=True,
+                        timeout=(5, 300),
+                    ) as response:
+                        if response.status_code != 200:
+                            try:
+                                err = response.json()
+                                msg = f"Ollama error: {response.status_code} - {err}"
+                            except Exception:
+                                msg = f"Ollama error: {response.status_code} - {response.text}"
+                            stream_error["message"] = msg
+                            return
+
+                        for line in response.iter_lines(decode_unicode=True):
+                            if not line:
+                                continue
+                            try:
+                                payload = json.loads(line)
+                            except Exception:
+                                continue
+
+                            delta = (
+                                payload.get("message", {}).get("content")
+                                or payload.get("response")
+                                or ""
+                            )
+                            if delta:
+                                loop.call_soon_threadsafe(delta_queue.put_nowait, delta)
+
+                            if payload.get("done"):
+                                break
+                except Exception as e:
+                    stream_error["message"] = str(e)
+                finally:
+                    loop.call_soon_threadsafe(delta_queue.put_nowait, stream_done)
+
+            producer_task = asyncio.create_task(asyncio.to_thread(_stream_ollama))
+
+            full_text = ""
+            pending_for_tts = ""
+            total_audio_chunks = 0
+
+            while True:
+                item = await delta_queue.get()
+                if item is stream_done:
+                    break
+
+                delta_text = str(item)
+                full_text += delta_text
+                pending_for_tts += delta_text
+
+                await self._send_message({"type": "response.text.delta", "delta": delta_text})
+
+                # Start speaking as soon as we have a complete sentence.
+                while True:
+                    sentence, pending_for_tts = _pop_ready_sentence(pending_for_tts)
+                    if not sentence:
+                        break
+                    total_audio_chunks += await _send_tts_for_text(sentence)
+
+            await producer_task
+
+            if stream_error["message"]:
+                logger.error(stream_error["message"])
+                await self._send_message(
+                    {
+                        "type": "error",
+                        "error": {"message": stream_error["message"]},
+                    }
+                )
+                return
+
+            # Flush trailing partial sentence if any
+            if pending_for_tts.strip():
+                total_audio_chunks += await _send_tts_for_text(pending_for_tts)
+
+            assistant_text = _clean_tts_text(full_text.strip())
+            if not assistant_text:
+                assistant_text = "I heard you"
+
+            self.conversation_history.append({"role": "assistant", "content": assistant_text})
+
+            await self._send_message({"type": "response.text.done", "text": assistant_text})
+            logger.info(f"🔊 Sent {total_audio_chunks} audio chunks")
+
+            await self._send_message(
+                {
                     "type": "response.done",
                     "response": {
                         "id": "resp_local",
                         "status": "completed",
                     },
-                })
-
-            else:
-                error_msg = f"Ollama error: {response.status_code}"
-                try:
-                    error_body = response.json()
-                    error_msg += f" - {error_body}"
-                except:
-                    error_msg += f" - {response.text}"
-                logger.error(error_msg)
-                await self._send_message({
-                    "type": "error",
-                    "error": {"message": f"Ollama error: {response.status_code}"},
-                })
+                }
+            )
 
         except Exception as e:
             logger.error(f"Response generation failed: {e}")
@@ -569,25 +611,35 @@ class LocalProvider(RealtimeAIProvider):
         try:
             logger.debug(f"Generating TTS for: {text[:50]}...")
 
-            # Generate audio chunks from Piper
+            # Generate audio sentence-by-sentence to avoid clipping at sentence boundaries
             audio_chunks = []
-            last_sample_rate = 22050
-            first_chunk = True
+            sample_rate = 22050
 
-            for chunk in self._tts_engine.synthesize(text):
-                # chunk.audio_int16_bytes is the raw PCM audio at the model's native rate
-                audio_bytes = chunk.audio_int16_bytes
-                logger.debug(f"Piper chunk: {len(audio_bytes)} bytes at {chunk.sample_rate}Hz")
+            # Tiny preroll helps some USB audio paths avoid clipping onset
+            preroll_samples = int(0.02 * sample_rate)  # 20 ms
+            audio_chunks.append(np.zeros(preroll_samples, dtype=np.int16).tobytes())
 
-                # Add a tiny pause between synthesis chunks (often sentence boundaries)
-                # to avoid clipped first phoneme on the next chunk.
-                if not first_chunk:
-                    pause_samples = int(0.05 * last_sample_rate)  # 50 ms
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+            if not sentences:
+                sentences = [text]
+
+            for idx, sentence in enumerate(sentences):
+                sentence_chunks = []
+                for chunk in self._tts_engine.synthesize(sentence):
+                    audio_bytes = chunk.audio_int16_bytes
+                    sample_rate = chunk.sample_rate
+                    logger.debug(
+                        f"Piper chunk: {len(audio_bytes)} bytes at {chunk.sample_rate}Hz"
+                    )
+                    sentence_chunks.append(audio_bytes)
+
+                if sentence_chunks:
+                    audio_chunks.append(b"".join(sentence_chunks))
+
+                # Natural pause between sentences
+                if idx < len(sentences) - 1:
+                    pause_samples = int(0.10 * sample_rate)  # 100 ms
                     audio_chunks.append(np.zeros(pause_samples, dtype=np.int16).tobytes())
-
-                audio_chunks.append(audio_bytes)
-                last_sample_rate = chunk.sample_rate
-                first_chunk = False
 
             # Concatenate all audio chunks
             if not audio_chunks:
