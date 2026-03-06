@@ -154,14 +154,27 @@ def on_button():
     try:
         # Ensure previous session thread is fully finished before starting new one
         if session_thread and session_thread.is_alive():
-            logger.warning("Previous session thread still running, waiting...", "⏳")
-            session_thread.join(timeout=2.0)
+            logger.warning("Previous session thread still running, forcing cleanup...", "⏳")
+            # Force stop the old session
+            global is_active, session_instance
+            is_active = False
+            if session_instance and session_instance.loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        session_instance.stop_session(), session_instance.loop
+                    ).result(timeout=1.0)
+                except:
+                    pass
+            session_instance = None
+            audio.stop_playback()
+            
+            # Wait briefly for cleanup
+            session_thread.join(timeout=3.0)
             if session_thread.is_alive():
-                logger.error(
-                    "Previous session thread did not finish, aborting new session", "❌"
+                logger.warning(
+                    "Previous session thread still stuck, continuing anyway", "⚠️"
                 )
-                _session_start_lock.release()
-                return
+                # Don't abort - just continue and let old thread die
 
         audio.ensure_playback_worker_started(config.CHUNK_MS)
         
