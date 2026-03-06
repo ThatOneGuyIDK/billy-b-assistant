@@ -21,10 +21,25 @@ print("Available audio devices:")
 print(sd.query_devices())
 print()
 
-# Audio settings (matching Billy's config)
-RATE = 24000
+# Audio settings - try to find supported sample rate
 CHANNELS = 1
 CHUNK_SIZE = 480
+RATE = None
+
+# Try common sample rates in order of preference
+for sr in [16000, 48000, 44100, 32000, 22050]:
+    try:
+        # Test if this sample rate works
+        sd.check_input_configuration(samplerate=sr, channels=CHANNELS)
+        RATE = sr
+        print(f"✓ Using sample rate: {RATE} Hz\n")
+        break
+    except:
+        continue
+
+if RATE is None:
+    RATE = 16000  # Fallback
+    print(f"⚠ Trying fallback sample rate: {RATE} Hz\n")
 
 def audio_callback(indata, frames, time_info, status):
     """Display audio level as a simple bar graph"""
