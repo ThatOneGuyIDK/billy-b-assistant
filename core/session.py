@@ -1127,7 +1127,7 @@ class BillySession:
         audio.send_mic_audio(self.ws, samples, self.loop)
 
     async def run_stream(self):
-        if not TEXT_ONLY_MODE and audio.playback_done_event.is_set():
+        if not TEXT_ONLY_MODE and not audio.playback_done_event.is_set():
             await asyncio.to_thread(audio.playback_done_event.wait)
 
         logger.info(
