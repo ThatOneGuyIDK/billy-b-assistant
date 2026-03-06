@@ -73,6 +73,8 @@ last_button_time = 0
 button_debounce_delay = 1.0  # seconds debounce
 session_started_time = 0.0
 _session_start_lock = threading.Lock()  # Lock to prevent concurrent session starts
+_preload_lock = threading.Lock()
+_runtime_preloaded = False
 
 # Setup hardware button
 button = Button(config.BUTTON_PIN, pull_up=True)
@@ -83,6 +85,40 @@ def is_billy_speaking():
     if not audio.playback_done_event.is_set():
         return True
     return bool(not audio.playback_queue.empty())
+
+
+def _preload_runtime_once(force: bool = False):
+    """Preload playback worker + local AI models once to reduce first-press latency."""
+    global _runtime_preloaded
+
+    if _runtime_preloaded and not force:
+        return
+
+    with _preload_lock:
+        if _runtime_preloaded and not force:
+            return
+
+        logger.info("🔧 Pre-loading AI/runtime components...", "🔧")
+
+        # Ensure playback worker is up before first interaction
+        audio.ensure_playback_worker_started(config.CHUNK_MS)
+
+        # Warm local models if available
+        try:
+            from .realtime_ai_provider import voice_provider_registry
+
+            provider = voice_provider_registry.get_provider()
+            if hasattr(provider, "_ensure_whisper_loaded"):
+                provider._ensure_whisper_loaded()
+                logger.success("✅ Whisper model loaded", "🔧")
+            if hasattr(provider, "_ensure_tts_loaded"):
+                provider._ensure_tts_loaded()
+                logger.success("✅ TTS model loaded", "🔧")
+        except Exception as e:
+            logger.warning(f"⚠️ Runtime pre-load failed (will retry on button): {e}", "🔧")
+            return
+
+        _runtime_preloaded = True
 
 
 def on_button():
@@ -172,21 +208,8 @@ def on_button():
                 _session_start_lock.release()
                 return
 
-        audio.ensure_playback_worker_started(config.CHUNK_MS)
-        
-        # Pre-load AI models before playing wake sound to avoid delay
-        logger.info("🔧 Pre-loading AI models...", "🔧")
-        try:
-            from .realtime_ai_provider import voice_provider_registry
-            provider = voice_provider_registry.get_provider()
-            if hasattr(provider, '_ensure_whisper_loaded'):
-                provider._ensure_whisper_loaded()
-                logger.success("✅ Whisper model loaded", "🔧")
-            if hasattr(provider, '_ensure_tts_loaded'):
-                provider._ensure_tts_loaded()
-                logger.success("✅ TTS model loaded", "🔧")
-        except Exception as e:
-            logger.warning(f"⚠️ Model pre-load failed (will retry later): {e}", "🔧")
+        # Preload should already be done at startup; retry here if startup preload failed.
+        _preload_runtime_once()
         
         # Clear the playback done event so session waits for wake-up sound
         audio.playback_done_event.clear()
@@ -231,6 +254,9 @@ def on_button():
 
 def start_loop():
     audio.detect_devices(debug=config.DEBUG_MODE)
+
+    # Preload everything up-front so first button press is instant.
+    _preload_runtime_once()
 
     if config.FLAP_ON_BOOT:
         logger.info("Starting Billy startup animation", "🎭")
