@@ -70,7 +70,7 @@ session_thread = None
 interrupt_event = threading.Event()
 session_instance: BillySession | None = None
 last_button_time = 0
-button_debounce_delay = 0.5  # seconds debounce
+button_debounce_delay = 1.0  # seconds debounce
 _session_start_lock = threading.Lock()  # Lock to prevent concurrent session starts
 
 # Setup hardware button
@@ -110,16 +110,20 @@ def on_button():
                 # and that will raise CancelledError because it's a logical place to
                 # stop.
                 with contextlib.suppress(CancelledError):
-                    future = asyncio.run_coroutine_threadsafe(
-                        session_instance.stop_session(), session_instance.loop
-                    )
-                    # Add timeout to prevent hanging
-                    try:
-                        future.result(timeout=5.0)  # Wait up to 5 seconds
-                        logger.success("Session stopped.")
-                    except TimeoutError:
-                        logger.warning("Session stop timeout, forcing cleanup")
-                        future.cancel()
+                    # Only try to stop if the event loop is initialized
+                    if session_instance.loop:
+                        future = asyncio.run_coroutine_threadsafe(
+                            session_instance.stop_session(), session_instance.loop
+                        )
+                        # Add timeout to prevent hanging
+                        try:
+                            future.result(timeout=5.0)  # Wait up to 5 seconds
+                            logger.success("Session stopped.")
+                        except TimeoutError:
+                            logger.warning("Session stop timeout, forcing cleanup")
+                            future.cancel()
+                    else:
+                        logger.warning("Session loop not yet initialized, skipping async stop")
             except Exception as e:
                 logger.warning(f"Error stopping session ({type(e)}): {e}")
             finally:
