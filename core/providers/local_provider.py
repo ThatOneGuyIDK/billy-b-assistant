@@ -159,6 +159,8 @@ class LocalSession:
                 
                 # Start thinking sound BEFORE transcription to eliminate awkward silence
                 await self._send_message({"type": "response.thinking_started"})
+                # Yield so session loop can process thinking_started immediately
+                await asyncio.sleep(0)
                 
                 # Transcribe
                 logger.info("🔧 Calling Whisper for transcription...", "🔧")
@@ -534,16 +536,20 @@ class LocalProvider(RealtimeAIProvider):
 
             audio_np = audio_i16.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
 
-            # Transcribe with Whisper - improved settings for accuracy
-            segments, _ = self._whisper_model.transcribe(
-                audio_np,
-                language="en",
-                beam_size=10,  # Increased for better accuracy
-                best_of=10,    # Increased for better accuracy
-                temperature=0.0,  # Deterministic output
-                vad_filter=True,  # Filter silence
-                condition_on_previous_text=False,  # Don't hallucinate
-            )
+            def _transcribe_blocking():
+                return self._whisper_model.transcribe(
+                    audio_np,
+                    language="en",
+                    beam_size=10,  # Increased for better accuracy
+                    best_of=10,    # Increased for better accuracy
+                    temperature=0.0,  # Deterministic output
+                    vad_filter=True,  # Filter silence
+                    condition_on_previous_text=False,  # Don't hallucinate
+                )
+
+            # Run Whisper in a worker thread so event loop can keep processing
+            # queued events (e.g., thinking_started) immediately.
+            segments, _ = await asyncio.to_thread(_transcribe_blocking)
             text = " ".join([segment.text for segment in segments]).strip()
 
             logger.debug(f"Whisper transcribed: '{text}'")
