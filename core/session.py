@@ -258,6 +258,7 @@ class BillySession:
         self.mic_running = False
         self.mic_timeout_task: asyncio.Task | None = None
         self.stop_thinking_sounds = False  # Flag to stop enqueueing thinking sounds
+        self.thinking_sound_task: asyncio.Task | None = None
 
         # Track whenever a session is updated after creation, and OpenAI is ready to receive voice.
         self.session_initialized = False
@@ -769,18 +770,36 @@ class BillySession:
             logger.info("Dory mode active. Ending session after single response.", "🎣")
             await self.stop_session()
 
+    async def _thinking_sound_loop(self):
+        """Continuously enqueue short thinking tones until response arrives."""
+        try:
+            while (
+                not self.stop_thinking_sounds
+                and self.session_active.is_set()
+                and not self.interrupt_event.is_set()
+            ):
+                # Keep a small buffer of thinking tones, avoid queue buildup.
+                if audio.playback_queue.qsize() < 6:
+                    audio.enqueue_thinking_tone(duration_ms=180, frequency_hz=700.0)
+                await asyncio.sleep(0.28)
+        except asyncio.CancelledError:
+            pass
+
     def _start_thinking_sound(self):
-        """Enqueue thinking sounds while waiting for response."""
+        """Start adaptive thinking sound loop while waiting for response."""
         if TEXT_ONLY_MODE:
             return
         self.stop_thinking_sounds = False
-        # Enqueue 15 thinking sounds (~8 seconds) - covers Ollama + TTS generation time
-        for _ in range(15):
-            audio.enqueue_thinking_tone(duration_ms=180, frequency_hz=700.0)
+        if self.thinking_sound_task and not self.thinking_sound_task.done():
+            return
+        self.thinking_sound_task = asyncio.create_task(self._thinking_sound_loop())
 
     def _stop_thinking_sound(self):
         """Stop enqueueing more thinking sounds (response is arriving)."""
         self.stop_thinking_sounds = True
+        if self.thinking_sound_task and not self.thinking_sound_task.done():
+            self.thinking_sound_task.cancel()
+        self.thinking_sound_task = None
 
     # ---- Mic helpers -------------------------------------------------
     def _start_mic(self, *, retry=True):
