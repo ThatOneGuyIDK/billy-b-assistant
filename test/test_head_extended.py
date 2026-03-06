@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Head Motor Extended Test - Move head further out
+Head Motor Extended Test - Move head further out with tx_pwm
 """
 import time
 import lgpio
@@ -18,12 +18,12 @@ try:
     lgpio.gpio_write(h, HEAD, 0)
     
     print("Head motor ON (100% power, 10 seconds)...")
-    # PWM with 100% duty cycle = full power, longer duration
-    lgpio.gpio_PWM(h, HEAD, FREQ, 100)
+    # Use tx_pwm with 100% duty (0-100 range)
+    lgpio.tx_pwm(h, HEAD, FREQ, 100)
     time.sleep(10)
     
     print("Head motor OFF")
-    lgpio.gpio_write(h, HEAD, 0)
+    lgpio.tx_pwm(h, HEAD, FREQ, 0)
     
     # Cleanup
     lgpio.gpio_free(h, HEAD)
