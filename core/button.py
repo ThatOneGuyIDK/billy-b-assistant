@@ -71,6 +71,7 @@ interrupt_event = threading.Event()
 session_instance: BillySession | None = None
 last_button_time = 0
 button_debounce_delay = 1.0  # seconds debounce
+session_started_time = 0.0
 _session_start_lock = threading.Lock()  # Lock to prevent concurrent session starts
 
 # Setup hardware button
@@ -90,7 +91,8 @@ def on_button():
         session_thread, \
         interrupt_event, \
         session_instance, \
-        last_button_time
+        last_button_time, \
+        session_started_time
 
     now = time.time()
     if now - last_button_time < button_debounce_delay:
@@ -98,9 +100,10 @@ def on_button():
     last_button_time = now
 
     if is_active:
-        # On real hardware, ignore presses while a session is active.
-        # This prevents accidental re-entry from noisy/sensitive buttons.
-        if not config.MOCKFISH:
+        # On real hardware, ignore only very-early presses during startup audio.
+        # This filters accidental bounce/double-presses but still allows a deliberate
+        # second press later to stop the current session.
+        if not config.MOCKFISH and (now - session_started_time) < 2.0:
             logger.warning("Ignoring button press: session already active", "⚠️")
             return
 
@@ -191,6 +194,7 @@ def on_button():
         logger.info("🔔 Playing wake-up sound before opening mic...", "🔔")
         threading.Thread(target=audio.play_random_wake_up_clip, daemon=True).start()
         is_active = True
+        session_started_time = time.time()
         interrupt_event = threading.Event()  # Fresh event for each session
         logger.info("Button pressed. Listening...", "🎤")
         
@@ -244,9 +248,6 @@ def start_loop():
     # a callback there (it can cause duplicate triggers).
     if config.MOCKFISH:
         button.when_pressed = on_button
-    else:
-        with contextlib.suppress(Exception):
-            button.when_pressed = None
     logger.info(
         "Ready. Press button to start a voice session. Press Ctrl+C to quit.", "🎦"
     )
