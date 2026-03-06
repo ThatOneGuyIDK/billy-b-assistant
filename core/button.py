@@ -98,6 +98,12 @@ def on_button():
     last_button_time = now
 
     if is_active:
+        # On real hardware, ignore presses while a session is active.
+        # This prevents accidental re-entry from noisy/sensitive buttons.
+        if not config.MOCKFISH:
+            logger.warning("Ignoring button press: session already active", "⚠️")
+            return
+
         logger.info("Button pressed during active session.", "🔁")
         interrupt_event.set()
         audio.stop_playback()
@@ -154,26 +160,14 @@ def on_button():
     try:
         # Ensure previous session thread is fully finished before starting new one
         if session_thread and session_thread.is_alive():
-            logger.warning("Previous session thread still running, forcing cleanup...", "⏳")
-            # Force stop the old session
-            is_active = False
-            if session_instance and session_instance.loop:
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        session_instance.stop_session(), session_instance.loop
-                    ).result(timeout=1.0)
-                except:
-                    pass
-            session_instance = None
-            audio.stop_playback()
-            
-            # Wait briefly for cleanup
+            logger.warning("Previous session thread still running, waiting...", "⏳")
             session_thread.join(timeout=3.0)
             if session_thread.is_alive():
-                logger.warning(
-                    "Previous session thread still stuck, continuing anyway", "⚠️"
+                logger.error(
+                    "Previous session thread did not finish, aborting new session", "❌"
                 )
-                # Don't abort - just continue and let old thread die
+                _session_start_lock.release()
+                return
 
         audio.ensure_playback_worker_started(config.CHUNK_MS)
         
@@ -246,7 +240,13 @@ def start_loop():
         move_tail(0.3)
         logger.info("Billy startup animation complete", "✅")
 
-    button.when_pressed = on_button
+    # We use explicit polling for hardware mode below, so don't also attach
+    # a callback there (it can cause duplicate triggers).
+    if config.MOCKFISH:
+        button.when_pressed = on_button
+    else:
+        with contextlib.suppress(Exception):
+            button.when_pressed = None
     logger.info(
         "Ready. Press button to start a voice session. Press Ctrl+C to quit.", "🎦"
     )
