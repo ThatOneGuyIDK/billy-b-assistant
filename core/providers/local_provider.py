@@ -285,7 +285,7 @@ class LocalSession:
 
                 if audio_bytes and len(audio_bytes) > 0:
                     # Send audio in chunks
-                    chunk_size = 4800  # 100ms at 24kHz
+                    chunk_size = 9600  # 200ms at 24kHz (fewer boundaries, smoother playback)
                     num_chunks = 0
                     for i in range(0, len(audio_bytes), chunk_size):
                         chunk = audio_bytes[i : i + chunk_size]
@@ -571,12 +571,23 @@ class LocalProvider(RealtimeAIProvider):
 
             # Generate audio chunks from Piper
             audio_chunks = []
+            last_sample_rate = 22050
+            first_chunk = True
 
             for chunk in self._tts_engine.synthesize(text):
                 # chunk.audio_int16_bytes is the raw PCM audio at the model's native rate
                 audio_bytes = chunk.audio_int16_bytes
                 logger.debug(f"Piper chunk: {len(audio_bytes)} bytes at {chunk.sample_rate}Hz")
+
+                # Add a tiny pause between synthesis chunks (often sentence boundaries)
+                # to avoid clipped first phoneme on the next chunk.
+                if not first_chunk:
+                    pause_samples = int(0.05 * last_sample_rate)  # 50 ms
+                    audio_chunks.append(np.zeros(pause_samples, dtype=np.int16).tobytes())
+
                 audio_chunks.append(audio_bytes)
+                last_sample_rate = chunk.sample_rate
+                first_chunk = False
 
             # Concatenate all audio chunks
             if not audio_chunks:
