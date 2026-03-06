@@ -14,7 +14,13 @@ from typing import Any, Optional
 import numpy as np
 import requests
 
-from ..config import DEBUG_MODE
+from ..config import (
+    DEBUG_MODE,
+    TTS_LENGTH_SCALE,
+    TTS_NOISE_SCALE,
+    TTS_NOISE_W,
+    TTS_SENTENCE_SILENCE,
+)
 from ..logger import logger
 from ..realtime_ai_provider import RealtimeAIProvider
 
@@ -625,7 +631,19 @@ class LocalProvider(RealtimeAIProvider):
 
             for idx, sentence in enumerate(sentences):
                 sentence_chunks = []
-                for chunk in self._tts_engine.synthesize(sentence):
+                synth_kwargs = {
+                    "length_scale": TTS_LENGTH_SCALE,
+                    "noise_scale": TTS_NOISE_SCALE,
+                    "noise_w": TTS_NOISE_W,
+                    "sentence_silence": TTS_SENTENCE_SILENCE,
+                }
+                try:
+                    chunk_iter = self._tts_engine.synthesize(sentence, **synth_kwargs)
+                except TypeError:
+                    # Older piper-tts versions may not support all kwargs
+                    chunk_iter = self._tts_engine.synthesize(sentence)
+
+                for chunk in chunk_iter:
                     audio_bytes = chunk.audio_int16_bytes
                     sample_rate = chunk.sample_rate
                     logger.debug(
