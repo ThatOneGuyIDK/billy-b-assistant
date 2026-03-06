@@ -187,6 +187,9 @@ def on_button():
         is_active = True
         interrupt_event = threading.Event()  # Fresh event for each session
         logger.info("Button pressed. Listening...", "🎤")
+        
+        # Give wake-up sound thread time to enqueue the audio
+        time.sleep(0.2)
 
         def run_session():
             global session_instance, is_active
