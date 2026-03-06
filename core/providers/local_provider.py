@@ -37,8 +37,12 @@ def _clean_tts_text(text: str) -> str:
     text = re.sub(r'\n\n+', ' ', text)
     text = re.sub(r'\n', ' ', text)
     
-    # Remove all forbidden punctuation except periods
-    text = re.sub(r'[,;:!?\-()[\]{}"\'\`]', '', text)
+    # Keep pause-friendly punctuation so Piper can sound more natural.
+    # Normalize separators to commas/periods instead of removing everything.
+    text = re.sub(r'[;:]+', ',', text)
+    text = re.sub(r'[—–-]+', ', ', text)
+    # Remove only punctuation that tends to hurt TTS prosody
+    text = re.sub(r'[()\[\]{}"\'\`]', '', text)
     
     # Remove extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
