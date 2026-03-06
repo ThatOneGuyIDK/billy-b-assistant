@@ -156,7 +156,6 @@ def on_button():
         if session_thread and session_thread.is_alive():
             logger.warning("Previous session thread still running, forcing cleanup...", "⏳")
             # Force stop the old session
-            global is_active, session_instance
             is_active = False
             if session_instance and session_instance.loop:
                 try:
