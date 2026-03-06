@@ -121,6 +121,21 @@ def _preload_runtime_once(force: bool = False):
         _runtime_preloaded = True
 
 
+def _announce_ready_prompt_once():
+    """Speak a short readiness prompt after preload is complete."""
+    try:
+        from .realtime_ai_provider import voice_provider_registry
+
+        provider = voice_provider_registry.get_provider()
+        audio_bytes = asyncio.run(
+            provider.generate_audio_clip("Press the red button to chat")
+        )
+        if audio_bytes:
+            audio.playback_queue.put(audio_bytes)
+    except Exception as e:
+        logger.warning(f"Could not play startup prompt: {e}", "⚠️")
+
+
 def on_button():
     global \
         is_active, \
@@ -257,6 +272,7 @@ def start_loop():
 
     # Preload everything up-front so first button press is instant.
     _preload_runtime_once()
+    _announce_ready_prompt_once()
 
     if config.FLAP_ON_BOOT:
         logger.info("Starting Billy startup animation", "🎭")
