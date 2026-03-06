@@ -251,7 +251,7 @@ SILENCE_THRESHOLD = float(os.getenv("SILENCE_THRESHOLD", "0.3"))  # RMS threshol
 CHUNK_MS = int(os.getenv("CHUNK_MS", "40"))
 PLAYBACK_LATENCY = float(os.getenv("PLAYBACK_LATENCY", "0.5"))  # USB audio buffer latency in seconds (0.5s recommended for Pi)
 USE_APLAY = os.getenv("USE_APLAY", "false").lower()  # "true" = use aplay subprocess, "false" = use sounddevice (default)
-PLAYBACK_VOLUME = 1
+PLAYBACK_VOLUME = float(os.getenv("PLAYBACK_VOLUME", "1.0"))
 MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))
 TURN_EAGERNESS = os.getenv("TURN_EAGERNESS", "high").strip().lower()
 if TURN_EAGERNESS not in {"low", "medium", "high"}:
