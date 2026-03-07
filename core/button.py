@@ -145,6 +145,8 @@ def on_button():
         last_button_time, \
         session_started_time
 
+    restarting_after_stop = False
+
     now = time.time()
     if now - last_button_time < button_debounce_delay:
         return  # Ignore very quick repeat presses (debounce)
@@ -200,16 +202,25 @@ def on_button():
                             if _session_start_lock.locked():
                                 _session_start_lock.release()
         is_active = False  # ✅ Ensure this is always set after stopping
-        # In mock mode, one Enter should be enough to reset and start listening again.
-        # On real hardware, keep existing behavior (press once to stop).
+        # If this was a deliberate press during an active session on real hardware,
+        # continue and start a new session from this same press.
         if not config.MOCKFISH:
-            return
+            restarting_after_stop = True
 
 
     # Use lock to prevent concurrent session starts (but allow interruption above)
     if not _session_start_lock.acquire(blocking=False):
-        logger.warning("Session start already in progress, ignoring button press", "⚠️")
-        return
+        acquired_after_wait = False
+        if restarting_after_stop:
+            # Session thread may still be finalizing; wait briefly so one press can stop+restart.
+            for _ in range(15):  # up to ~1.5s
+                time.sleep(0.1)
+                if _session_start_lock.acquire(blocking=False):
+                    acquired_after_wait = True
+                    break
+        if not acquired_after_wait:
+            logger.warning("Session start already in progress, ignoring button press", "⚠️")
+            return
 
     try:
         # Ensure previous session thread is fully finished before starting new one
@@ -243,7 +254,11 @@ def on_button():
             global session_instance, is_active
             try:
                 move_head("on")
-                session_instance = BillySession(interrupt_event=interrupt_event)
+                # Button mode should be press-to-talk per turn (no auto follow-up mic reopen)
+                session_instance = BillySession(
+                    interrupt_event=interrupt_event,
+                    autofollowup="never",
+                )
                 session_instance.last_activity[0] = time.time()
                 asyncio.run(session_instance.start())
             except Exception as e:
