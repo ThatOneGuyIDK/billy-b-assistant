@@ -33,6 +33,7 @@ def _clean_tts_text(text: str) -> str:
     text = re.sub(r'\*(.+?)\*', r'\1', text)  # *italic* -> italic
     text = re.sub(r'_(.+?)_', r'\1', text)  # _italic_ -> italic
     text = re.sub(r'`(.+?)`', r'\1', text)  # `code` -> code
+    text = text.replace('*', '')  # Remove any stray asterisks
     
     # Remove list markers and extra formatting
     text = re.sub(r'^[\s]*[-*•]\s+', '', text, flags=re.MULTILINE)  # Remove bullet points
@@ -320,7 +321,9 @@ class LocalSession:
                 if item is stream_done:
                     break
 
-                delta_text = str(item)
+                delta_text = str(item).replace("*", "")
+                if not delta_text:
+                    continue
                 full_text += delta_text
                 pending_for_tts += delta_text
 
