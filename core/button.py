@@ -321,15 +321,51 @@ def start_loop():
     else:
         logger.info("Listening for real GPIO button press on pin 24...", "🔘")
         button_was_pressed = False
+        button_press_start_time = 0.0
+        shutdown_threshold = 5.0  # seconds to hold for shutdown
         while True:
             try:
                 # Poll button state instead of relying on callbacks
                 if button.is_pressed and not button_was_pressed:
-                    logger.info("🔘 Button press detected (GPIO 24)", "🔘")
-                    on_button()
+                    # Button just pressed
+                    button_press_start_time = time.time()
                     button_was_pressed = True
-                elif not button.is_pressed:
+                elif button.is_pressed and button_was_pressed:
+                    # Button is being held
+                    hold_duration = time.time() - button_press_start_time
+                    if hold_duration >= shutdown_threshold:
+                        logger.info("🔴 Button held for 5 seconds - initiating shutdown", "🔴")
+                        # Stop any active session
+                        if is_active and session_instance:
+                            interrupt_event.set()
+                            audio.stop_playback()
+                        # Announce shutdown
+                        try:
+                            from .realtime_ai_provider import voice_provider_registry
+                            provider = voice_provider_registry.get_provider()
+                            audio_bytes = asyncio.run(
+                                provider.generate_audio_clip("Powering down")
+                            )
+                            if audio_bytes:
+                                audio.playback_queue.put(audio_bytes)
+                                # Wait for announcement to play
+                                time.sleep(2.5)
+                        except Exception as e:
+                            logger.warning(f"Could not play shutdown announcement: {e}", "⚠️")
+                        # Perform shutdown
+                        import subprocess
+                        logger.info("Shutting down system...", "🔴")
+                        subprocess.run(["sudo", "shutdown", "-h", "now"])
+                        break
+                elif not button.is_pressed and button_was_pressed:
+                    # Button released
+                    hold_duration = time.time() - button_press_start_time
+                    if hold_duration < shutdown_threshold:
+                        # Normal press - trigger button action
+                        logger.info("🔘 Button press detected (GPIO 24)", "🔘")
+                        on_button()
                     button_was_pressed = False
+                    button_press_start_time = 0.0
                 time.sleep(0.05)  # Poll every 50ms
             except Exception as e:
                 logger.error(f"Button polling error: {e}")
