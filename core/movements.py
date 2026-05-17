@@ -7,7 +7,7 @@ from threading import Lock, Thread
 
 import numpy as np
 
-from .config import BILLY_PINS, MOCKFISH, is_classic_billy
+from .config import BILLY_PINS, MOCKFISH, is_classic_billy, INVERT_HEAD_MOUTH
 from .logger import logger
 
 
@@ -89,6 +89,12 @@ else:
     TAIL = 17  # pin 11
 
 # Collect all pins we actually use
+# Allow swapping head <-> mouth mapping via env toggle for mis-wired setups
+if INVERT_HEAD_MOUTH:
+    _tmp = MOUTH
+    MOUTH = HEAD
+    HEAD = _tmp
+
 motor_pins = [p for p in (MOUTH, HEAD, TAIL, GND_1, GND_2, GND_3) if p is not None]
 
 # Claim/initialize

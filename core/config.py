@@ -116,3 +116,8 @@ try:
     MAIN_LOOP = asyncio.get_event_loop()
 except RuntimeError:
     MAIN_LOOP = None
+
+    # === Motor mapping tweaks ===
+    # If your wiring has the head and mouth pins swapped, set this to true
+    # in your .env to invert the two pins without editing code.
+    INVERT_HEAD_MOUTH = os.getenv("INVERT_HEAD_MOUTH", "false").lower() == "true"
