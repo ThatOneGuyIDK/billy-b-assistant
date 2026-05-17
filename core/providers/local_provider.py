@@ -20,6 +20,7 @@ from ..config import (
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     OLLAMA_TEMPERATURE,
+    PIPER_MODEL_DIR,
     TTS_LENGTH_SCALE,
     TTS_VOCAL_DARKEN,
     TTS_VOCAL_DRIVE,
@@ -545,10 +546,7 @@ class LocalProvider(RealtimeAIProvider):
             logger.error(f"Cannot connect to Ollama: {e}")
             raise RuntimeError(f"Ollama not available at {self.ollama_host}")
 
-        # Initialize Whisper model (lazy load)
-        self._ensure_whisper_loaded()
-
-        # Initialize TTS engine (lazy load)
+        # Whisper/TTS are warmed at boot via button preload; load on demand if skipped.
         self._ensure_tts_loaded()
 
         # For local provider, strip out function-calling instructions since Ollama can't call functions
@@ -573,15 +571,55 @@ class LocalProvider(RealtimeAIProvider):
 
     # ==================== Private Helper Methods ====================
 
+    def _cached_whisper_snapshot_path(self, download_root: str | None) -> str | None:
+        """Return a local HF snapshot dir if the model is already on disk."""
+        root = download_root or os.path.expanduser("~/.cache/huggingface")
+        snapshots_dir = os.path.join(
+            root,
+            "hub",
+            f"models--Systran--faster-whisper-{self.whisper_model}",
+            "snapshots",
+        )
+        if not os.path.isdir(snapshots_dir):
+            return None
+        for snap_id in sorted(os.listdir(snapshots_dir)):
+            path = os.path.join(snapshots_dir, snap_id)
+            if not os.path.isdir(path):
+                continue
+            if os.path.isfile(os.path.join(path, "model.bin")) or os.path.isfile(
+                os.path.join(path, "config.json")
+            ):
+                return path
+        return None
+
     def _ensure_whisper_loaded(self):
         """Lazy load Whisper model"""
         if self._whisper_model is None:
             try:
                 from faster_whisper import WhisperModel
 
-                self._whisper_model = WhisperModel(
-                    self.whisper_model, device="cpu", compute_type="int8"
+                download_root = os.getenv("WHISPER_DOWNLOAD_ROOT") or os.getenv(
+                    "HF_HOME"
                 )
+                cached_path = self._cached_whisper_snapshot_path(download_root)
+                model_source = cached_path or self.whisper_model
+                kwargs: dict[str, Any] = {
+                    "device": "cpu",
+                    "compute_type": "int8",
+                }
+                if download_root and not cached_path:
+                    kwargs["download_root"] = download_root
+
+                # HF_HUB_OFFLINE breaks snapshot resolution even when weights exist.
+                saved_offline = os.environ.pop("HF_HUB_OFFLINE", None)
+                try:
+                    self._whisper_model = WhisperModel(model_source, **kwargs)
+                finally:
+                    if saved_offline is not None:
+                        os.environ["HF_HUB_OFFLINE"] = saved_offline
+
+                if cached_path:
+                    logger.debug(f"Whisper loaded from cache path: {cached_path}")
                 logger.success(f"Whisper model '{self.whisper_model}' loaded")
             except ImportError:
                 logger.error(
@@ -589,7 +627,19 @@ class LocalProvider(RealtimeAIProvider):
                 )
                 raise
             except Exception as e:
+                err = str(e)
                 logger.error(f"Failed to load Whisper: {e}")
+                if "HF_HUB_OFFLINE" in err or "outgoing traffic has been disabled" in err:
+                    logger.error(
+                        "Remove HF_HUB_OFFLINE=1 from .env — it blocks loading cached Whisper models."
+                    )
+                if "parse_error" in err or "json.exception" in err:
+                    cache = os.getenv("HF_HOME", "~/.cache/huggingface")
+                    logger.error(
+                        f"Whisper cache for '{self.whisper_model}' looks corrupt "
+                        f"(interrupted download). In .env set WHISPER_MODEL=base "
+                        f"or remove: {cache}/hub/models--Systran--faster-whisper-{self.whisper_model}"
+                    )
                 raise
 
     def _ensure_tts_loaded(self):
@@ -599,8 +649,8 @@ class LocalProvider(RealtimeAIProvider):
                 from piper import PiperVoice
                 import os
                 
-                # Local Piper model path
-                model_dir = os.path.expanduser("~/.piper/models")
+                model_dir = PIPER_MODEL_DIR
+                os.makedirs(model_dir, exist_ok=True)
                 configured_model_path = os.path.join(model_dir, f"{self.tts_voice}.onnx")
                 fallback_voice = "en_US-lessac-medium"
                 fallback_model_path = os.path.join(model_dir, f"{fallback_voice}.onnx")
@@ -615,8 +665,9 @@ class LocalProvider(RealtimeAIProvider):
                         model_path = fallback_model_path
                     else:
                         raise FileNotFoundError(
-                            f"Piper model not found at {configured_model_path} and fallback not found at {fallback_model_path}.\n"
-                            f"Download voices from: https://huggingface.co/rhasspy/piper-voices"
+                            f"Piper model not found at {configured_model_path} "
+                            f"and fallback not found at {fallback_model_path}. "
+                            f"Run once (online): ./setup/preload_piper.sh"
                         )
                 
                 # Load Piper with local model file

@@ -1,3 +1,4 @@
+import os
 import shutil
 import signal
 import sys
@@ -50,11 +51,15 @@ print(f"🔧 Log level set to: {current_level.name}")
 
 def signal_handler(sig, frame):
     logger.info("Exiting cleanly (signal received).", "👋")
-    playback_queue.put(None)
+    try:
+        playback_queue.put_nowait(None)
+    except Exception:
+        pass
     from core.movements import cleanup_gpio
 
     cleanup_gpio()
-    sys.exit(0)
+    # Do not wait for Hugging Face download threads (hf-xet) on shutdown.
+    os._exit(0)
 
 
 def main():

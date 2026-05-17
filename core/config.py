@@ -26,6 +26,9 @@ except Exception:
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 TTS_VOICE = os.getenv("TTS_VOICE", "en_US-lessac-medium")
+PIPER_MODEL_DIR = os.path.expanduser(
+    os.getenv("PIPER_MODEL_DIR", "~/.piper/models")
+)
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "96"))
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "1536"))
 OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.4"))
@@ -50,6 +53,10 @@ RUN_MODE = os.getenv("RUN_MODE", "normal").lower()
 # === Billy Hardware ===
 BILLY_MODEL = os.getenv("BILLY_MODEL", "modern").strip().lower()
 BILLY_PINS = os.getenv("BILLY_PINS", "new").strip().lower()
+# Optional per-motor BCM GPIO overrides (see docs/BUILDME.md). Unset = use BILLY_PINS profile.
+MOTOR_HEAD_GPIO = os.getenv("MOTOR_HEAD_GPIO")
+MOTOR_MOUTH_GPIO = os.getenv("MOTOR_MOUTH_GPIO")
+MOTOR_TAIL_GPIO = os.getenv("MOTOR_TAIL_GPIO")
 
 # === Audio Config ===
 SPEAKER_PREFERENCE = os.getenv("SPEAKER_PREFERENCE")
@@ -71,8 +78,8 @@ TTS_VOCAL_LOWPASS_HZ = float(os.getenv("TTS_VOCAL_LOWPASS_HZ", "4200"))
 TTS_VOCAL_LIMIT = float(os.getenv("TTS_VOCAL_LIMIT", "0.92"))
 MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))
 # Motor lip-sync (Piper TTS is quieter than song stems — use lower thresholds)
-MOUTH_FLAP_THRESHOLD = int(os.getenv("MOUTH_FLAP_THRESHOLD", "350"))
-TAIL_FLAP_THRESHOLD = int(os.getenv("TAIL_FLAP_THRESHOLD", "900"))
+MOUTH_FLAP_THRESHOLD = int(os.getenv("MOUTH_FLAP_THRESHOLD", "120"))
+TAIL_FLAP_THRESHOLD = int(os.getenv("TAIL_FLAP_THRESHOLD", "450"))
 MOTOR_SYNC_HEAD = os.getenv("MOTOR_SYNC_HEAD", "true").lower() == "true"
 MOTOR_SYNC_TAIL = os.getenv("MOTOR_SYNC_TAIL", "true").lower() == "true"
 TURN_EAGERNESS = os.getenv("TURN_EAGERNESS", "high").strip().lower()
@@ -104,6 +111,8 @@ SERVER_VAD_PARAMS = {
 BUTTON_PIN = 27 if BILLY_PINS == "legacy" else 24  # legacy=pin 13, new=pin 18
 # If head and mouth wires are swapped on the driver board, set INVERT_HEAD_MOUTH=true in .env
 INVERT_HEAD_MOUTH = os.getenv("INVERT_HEAD_MOUTH", "false").lower() == "true"
+# Flip drive direction for every motor (H-bridge swap + active-low on single-wire GPIO)
+MOTOR_REVERSE_ALL = os.getenv("MOTOR_REVERSE_ALL", "false").lower() == "true"
 
 # === Software Config ===
 FLAP_ON_BOOT = os.getenv("FLAP_ON_BOOT", "false").lower() == "true"

@@ -3,6 +3,7 @@ websockets
 numpy
 scipy
 gpiozero
+lgpio
 python-dotenv
 pydub
 requests

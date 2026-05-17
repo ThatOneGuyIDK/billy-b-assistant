@@ -10,10 +10,12 @@ from .movements import move_head, move_tail
 
 
 try:
-    # Force lgpio pin factory before importing Button
+    # Pi 5 needs lgpio (system: liblgpio-dev) before gpiozero can use the lgpio pin factory
+    import lgpio  # noqa: F401
+
     import os
-    os.environ['GPIOZERO_PIN_FACTORY'] = 'lgpio'
-    
+
+    os.environ["GPIOZERO_PIN_FACTORY"] = "lgpio"
     from gpiozero import Button
 
     gpiozero_available = True
@@ -281,12 +283,25 @@ def on_button():
             _session_start_lock.release()
 
 
+def _bootstrap_models_and_prompt():
+    """Load Whisper/TTS and play the startup line without blocking the button loop."""
+    try:
+        logger.info(
+            "Loading AI models (first Whisper download can take several minutes on the Pi)...",
+            "🔧",
+        )
+        _preload_runtime_once()
+        _announce_ready_prompt_once()
+        logger.success("Models loaded and startup prompt queued.", "✅")
+    except Exception as e:
+        logger.error(f"Background model load failed: {e}")
+
+
 def start_loop():
     audio.detect_devices(debug=config.DEBUG_MODE)
 
-    # Preload everything up-front so first button press is instant.
-    _preload_runtime_once()
-    _announce_ready_prompt_once()
+    # Do not block GPIO / button polling on Hugging Face / Whisper first-time download.
+    threading.Thread(target=_bootstrap_models_and_prompt, daemon=True).start()
 
     if config.FLAP_ON_BOOT:
         logger.info("Starting Billy startup animation", "🎭")

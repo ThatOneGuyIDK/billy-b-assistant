@@ -1,13 +1,22 @@
 [Unit]
 Description=Billy Bass Assistant
 After=network.target sound.target
+Wants=network-online.target
 
 [Service]
-User=pi
+Type=simple
+User=billy
 Environment=PYTHONUNBUFFERED=1
-WorkingDirectory=/home/pi/billy-b-assistant
-ExecStart=/home/pi/billy-b-assistant/venv/bin/python /home/pi/billy-b-assistant/main.py
-Restart=always
+Environment=HF_HOME=/home/billy/.cache/huggingface
+WorkingDirectory=/home/billy/billy-b-assistant
+ExecStart=/home/billy/billy-b-assistant/venv/bin/python /home/billy/billy-b-assistant/main.py
+# First Whisper download can take many minutes on a Pi; do not kill during start.
+TimeoutStartSec=0
+# Allow HF download threads to die on stop without a 90s hang + SIGKILL loop.
+TimeoutStopSec=15
+KillMode=control-group
+Restart=on-failure
+RestartSec=15
 
 [Install]
 WantedBy=multi-user.target

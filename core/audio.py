@@ -177,6 +177,16 @@ def detect_devices(debug=False):
 
     if MIC_DEVICE_INDEX is None or (OUTPUT_DEVICE_INDEX is None and not TEXT_ONLY_MODE):
         logger.error("No suitable input/output devices found.")
+        if MIC_DEVICE_INDEX is None:
+            logger.error(
+                "No microphone detected. Check USB mic, run 'arecord -l', "
+                "or set MIC_PREFERENCE in .env to part of the device name."
+            )
+        if OUTPUT_DEVICE_INDEX is None and not TEXT_ONLY_MODE:
+            logger.error(
+                "No speaker detected. Check USB audio, run 'aplay -l', "
+                "or set SPEAKER_PREFERENCE in .env."
+            )
         sys.exit(1)
 
 

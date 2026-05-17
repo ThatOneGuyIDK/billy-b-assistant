@@ -7,13 +7,15 @@ prompts before pulsing each motor briefly (safe defaults). It uses the
 movement helpers in `core/movements.py` so wiring logic and safety checks
 are reused.
 
-Usage:
-    venv\Scripts\python test\manual_motor_test.py
-or on Unix:
-    venv/bin/python3 test/manual_motor_test.py
+Usage (from repo root):
+    venv/bin/python test/manual_motor_test.py
 """
-import time
+import os
 import sys
+import time
+
+# Allow `from core import ...` when run as a script from repo root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from core import movements
 
