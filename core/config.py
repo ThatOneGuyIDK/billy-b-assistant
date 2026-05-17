@@ -113,6 +113,8 @@ BUTTON_PIN = 27 if BILLY_PINS == "legacy" else 24  # legacy=pin 13, new=pin 18
 INVERT_HEAD_MOUTH = os.getenv("INVERT_HEAD_MOUTH", "false").lower() == "true"
 # Flip drive direction for every motor (H-bridge swap + active-low on single-wire GPIO)
 MOTOR_REVERSE_ALL = os.getenv("MOTOR_REVERSE_ALL", "false").lower() == "true"
+# Head only — use when head hums but won't extend (often correct if mouth/tail are fine)
+MOTOR_REVERSE_HEAD = os.getenv("MOTOR_REVERSE_HEAD", "false").lower() == "true"
 
 # === Software Config ===
 FLAP_ON_BOOT = os.getenv("FLAP_ON_BOOT", "false").lower() == "true"

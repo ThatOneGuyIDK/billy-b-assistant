@@ -14,6 +14,7 @@ from .config import (
     MOTOR_HEAD_GPIO,
     MOTOR_MOUTH_GPIO,
     MOTOR_REVERSE_ALL,
+    MOTOR_REVERSE_HEAD,
     MOTOR_TAIL_GPIO,
     is_classic_billy,
 )
@@ -120,7 +121,8 @@ motor_pins = [p for p in (MOUTH, HEAD, TAIL, GND_1, GND_2, GND_3) if p is not No
 logger.info(
     f"Using third motor: {USE_THIRD_MOTOR} | Pin profile: {BILLY_PINS} | "
     f"MOUTH GPIO {MOUTH} | HEAD GPIO {HEAD} | TAIL GPIO {TAIL}"
-    + (" | motors reversed" if MOTOR_REVERSE_ALL else ""),
+    + (" | motors reversed" if MOTOR_REVERSE_ALL else "")
+    + (" | head reversed" if MOTOR_REVERSE_HEAD and not MOTOR_REVERSE_ALL else ""),
     "⚙️",
 )
 
@@ -135,9 +137,60 @@ def _gpio_active() -> int:
     return 0 if MOTOR_REVERSE_ALL else 1
 
 
+def _head_reversed() -> bool:
+    return MOTOR_REVERSE_ALL or MOTOR_REVERSE_HEAD
+
+
 def _single_wire_pin(pin: int) -> bool:
-    """True when this pin has no H-bridge mate (one PWM wire per motor)."""
-    return _mate_for(pin) is None
+    """True when this pin uses active-low reverse (not head — head has its own path)."""
+    if _mate_for(pin) is not None:
+        return False
+    if pin == HEAD and _head_reversed():
+        return False
+    return MOTOR_REVERSE_ALL
+
+
+def _head_extend_pins() -> tuple[int, int | None]:
+    """Return (drive_pin, idle_pin) for head extend; idle is None on dedicated head GPIO."""
+    mate = _mate_for(HEAD)
+    if mate is None:
+        return HEAD, None
+    if _head_reversed():
+        return mate, HEAD
+    return HEAD, mate
+
+
+def _drive_head_pwm(duty: int) -> None:
+    """Drive head extend: H-bridge swap when reversed; steady HIGH on single-wire reverse."""
+    global _gpio_active
+    if not _gpio_active:
+        return
+    drive, idle = _head_extend_pins()
+    duty = int(max(0, min(100, abs(duty))))
+    if idle is not None:
+        clear_pwm(idle)
+        try:
+            lgpio.gpio_write(h, idle, _gpio_rest())
+        except (lgpio.error, Exception):
+            _gpio_active = False
+            return
+        set_pwm(drive, duty)
+        return
+    # Dedicated head wire — reversed: full HIGH avoids PWM buzz on some drivers
+    clear_pwm(HEAD)
+    try:
+        if _head_reversed():
+            lgpio.tx_pwm(h, HEAD, FREQ, 0)
+            lgpio.gpio_write(h, HEAD, 1)
+        else:
+            set_pwm(HEAD, duty)
+    except (lgpio.error, Exception) as e:
+        logger.error(f"Head drive failed on GPIO {HEAD}: {e}", "❌")
+        _gpio_active = False
+        return
+    if duty > 0:
+        _pwm[HEAD]["duty"] = duty
+        _pwm[HEAD]["since"] = time.time()
 
 
 # Claim/initialize
@@ -265,12 +318,20 @@ def brake_motor(pin1, pin2=None):
         return
 
 
-def run_motor_async(pwm_pin, low_pin=None, speed_percent=100, duration=0.3, brake=True):
+def run_motor_async(
+    pwm_pin,
+    low_pin=None,
+    speed_percent=100,
+    duration=0.3,
+    brake=True,
+    *,
+    apply_reverse: bool = True,
+):
     global _gpio_active
     if not _gpio_active:
         return  # GPIO handle already closed, skip
     # H-bridge (legacy / shared): swap IN1/IN2 to reverse direction
-    if MOTOR_REVERSE_ALL and low_pin is not None:
+    if apply_reverse and MOTOR_REVERSE_ALL and low_pin is not None:
         pwm_pin, low_pin = low_pin, pwm_pin
     if low_pin is not None:
         try:
@@ -299,20 +360,11 @@ def move_head(state="on"):
     global head_out
 
     def _move_head_on():
-        global _gpio_active
         if not _gpio_active:
-            return  # GPIO handle already closed, skip
-        # Ensure opposite input is LOW if sharing a bridge (2-motor cases)
-        # For 3-motor "new" layout, mate is hard GND so this is a no-op.
-        if TAIL is not None:
-            try:
-                lgpio.gpio_write(h, TAIL, _gpio_rest())
-            except (lgpio.error, Exception):
-                _gpio_active = False
-                return
-        set_pwm(HEAD, 80)
+            return
+        _drive_head_pwm(80)
         time.sleep(0.5)
-        set_pwm(HEAD, 100)  # stay extended
+        _drive_head_pwm(100)  # stay extended
 
     if state == "on":
         if not head_out:
@@ -355,7 +407,7 @@ def pulse_head(duration=0.14, speed_percent=80):
     if not _gpio_active or head_out or _head_tail_lock.locked():
         return
 
-    mate = _mate_for(HEAD)
+    drive, idle = _head_extend_pins()
 
     def _pulse():
         global _gpio_active
@@ -364,13 +416,18 @@ def pulse_head(duration=0.14, speed_percent=80):
         with _head_tail_lock:
             if head_out or not _gpio_active:
                 return
-            if mate is not None:
-                try:
-                    lgpio.gpio_write(h, mate, _gpio_rest())
-                except (lgpio.error, Exception):
-                    _gpio_active = False
-                    return
-            run_motor_async(HEAD, mate, speed_percent=speed_percent, duration=duration)
+            if idle is not None:
+                run_motor_async(
+                    drive,
+                    idle,
+                    speed_percent=speed_percent,
+                    duration=duration,
+                    apply_reverse=False,
+                )
+            else:
+                _drive_head_pwm(speed_percent)
+                time.sleep(duration)
+                brake_motor(HEAD, None)
 
     threading.Thread(target=_pulse, daemon=True).start()
 
