@@ -29,9 +29,10 @@ from .config import (
 from .logger import logger
 from .movements import (
     flap_from_pcm_chunk,
-    interlude,
     move_head,
     move_tail_async,
+    reset_motor_sync_state,
+    sync_motors_from_pcm_chunk,
 )
 
 
@@ -183,8 +184,6 @@ def playback_worker(chunk_ms):
     global last_played_time
     global song_start_time
 
-    interlude_counter = 0
-    interlude_target = random.randint(150000, 300000)
     head_move_active = False
     head_move_end_time = 0
     next_head_move = None
@@ -274,18 +273,9 @@ def playback_worker(chunk_ms):
                             sub = mono[i : i + chunk_len]
                             if len(sub) == 0:
                                 continue
-                            flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                            sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                             stream.write(_resample_24k_mono_to_48k_stereo(sub))
-                            
-                            # Small delay to prevent USB audio buffer overflow
                             time.sleep(0.001)
-
-                            interlude_counter += len(sub)
-                            interlude_counter, interlude_target = (
-                                _maybe_trigger_interlude(
-                                    interlude_counter, interlude_target
-                                )
-                            )
 
                 else:
                     chunk = item
@@ -295,16 +285,9 @@ def playback_worker(chunk_ms):
                         sub = mono[i : i + chunk_len]
                         if len(sub) == 0:
                             continue
-                        flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                        sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                         stream.write(_resample_24k_mono_to_48k_stereo(sub))
-                        
-                        # Small delay to prevent USB audio buffer overflow
                         time.sleep(0.001)
-
-                        interlude_counter += len(sub)
-                        interlude_counter, interlude_target = _maybe_trigger_interlude(
-                            interlude_counter, interlude_target
-                        )
 
                 playback_queue.task_done()
                 last_played_time = time.time()
@@ -325,8 +308,6 @@ def playback_worker_aplay(chunk_ms):
     global last_played_time
     global song_start_time
 
-    interlude_counter = 0
-    interlude_target = random.randint(150000, 300000)
     aplay_failure_count = 0
     max_failures = 3
     
@@ -405,16 +386,9 @@ def playback_worker_aplay(chunk_ms):
                         sub = mono[i : i + chunk_len]
                         if len(sub) == 0:
                             continue
-                        flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                        sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                         stereo = _resample_24k_mono_to_48k_stereo(sub)
                         audio_buffer.extend(stereo.tobytes())
-
-                        interlude_counter += len(sub)
-                        interlude_counter, interlude_target = (
-                            _maybe_trigger_interlude(
-                                interlude_counter, interlude_target
-                            )
-                        )
 
             else:
                 chunk = item
@@ -424,14 +398,9 @@ def playback_worker_aplay(chunk_ms):
                     sub = mono[i : i + chunk_len]
                     if len(sub) == 0:
                         continue
-                    flap_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                    sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
                     stereo = _resample_24k_mono_to_48k_stereo(sub)
                     audio_buffer.extend(stereo.tobytes())
-
-                    interlude_counter += len(sub)
-                    interlude_counter, interlude_target = _maybe_trigger_interlude(
-                        interlude_counter, interlude_target
-                    )
 
             # Play the collected audio
             if len(audio_buffer) > 0:
@@ -646,6 +615,7 @@ def play_random_wake_up_clip():
 
 def stop_playback():
     """Immediately stop playback and flush queue."""
+    reset_motor_sync_state()
     while not playback_queue.empty():
         try:
             playback_queue.get_nowait()
@@ -937,13 +907,3 @@ def _resample_24k_mono_to_48k_stereo(mono: np.ndarray) -> np.ndarray:
     resampled = resample(mono, int(len(mono) * 48000 / 24000)).astype(np.int16)
     stereo = np.repeat(resampled[:, np.newaxis], 2, axis=1)
     return np.clip(stereo * PLAYBACK_VOLUME, -32768, 32767).astype(np.int16)
-
-
-def _maybe_trigger_interlude(
-    interlude_counter: int, interlude_target: int
-) -> tuple[int, int]:
-    if interlude_counter >= interlude_target:
-        interlude()
-        interlude_counter = 0
-        interlude_target = random.randint(80000, 160000)
-    return interlude_counter, interlude_target

@@ -128,6 +128,9 @@ _motor_watchdog_running = False
 _last_flap = 0
 _mouth_open_until = 0
 _last_rms = 0
+_last_tail_flap = 0.0
+_last_head_pulse = 0.0
+_sync_smoothed_rms = 0.0
 head_out = False
 
 # === PWM tracking (so watchdog can see PWM activity) ===
@@ -271,61 +274,179 @@ def move_tail_async(duration=0.3):
     threading.Thread(target=move_tail, args=(duration,), daemon=True).start()
 
 
-def _articulation_multiplier():
-    """Return direct articulation multiplier (1 = normal, higher = slower)."""
-    # Persona system removed; use global MOUTH_ARTICULATION from config
+def pulse_head(duration=0.14, speed_percent=80):
+    """Short head emphasis — does not latch head_out (unlike move_head('on'))."""
+    global _gpio_active
+
+    if not _gpio_active or head_out or _head_tail_lock.locked():
+        return
+
+    mate = _mate_for(HEAD)
+
+    def _pulse():
+        global _gpio_active
+        if not _gpio_active or head_out:
+            return
+        with _head_tail_lock:
+            if head_out or not _gpio_active:
+                return
+            if mate is not None:
+                try:
+                    lgpio.gpio_write(h, mate, 0)
+                except (lgpio.error, Exception):
+                    _gpio_active = False
+                    return
+            run_motor_async(HEAD, mate, speed_percent=speed_percent, duration=duration)
+
+    threading.Thread(target=_pulse, daemon=True).start()
+
+
+def reset_motor_sync_state():
+    """Clear envelope follower between playback sessions."""
+    global _last_rms, _sync_smoothed_rms, _last_flap, _last_tail_flap, _last_head_pulse
+    _last_rms = 0.0
+    _sync_smoothed_rms = 0.0
+    _last_flap = 0.0
+    _last_tail_flap = 0.0
+    _last_head_pulse = 0.0
+
+
+def _mouth_duration_scale():
+    """Higher MOUTH_ARTICULATION = snappier/shorter flaps (inverse of old behavior)."""
     try:
         from .config import MOUTH_ARTICULATION
 
-        return max(0, min(10, float(MOUTH_ARTICULATION)))
+        articulation = max(1, min(10, int(MOUTH_ARTICULATION)))
     except Exception:
-        return 5
+        articulation = 1
+    return max(0.2, 1.0 / articulation)
 
 
-# === Mouth Sync ===
-def flap_from_pcm_chunk(
-    audio, threshold=1500, min_flap_gap=0.15, chunk_ms=40, sample_rate=24000
+def _pcm_levels(audio: np.ndarray) -> tuple[float, float]:
+    if audio.size == 0:
+        return 0.0, 0.0
+    samples = audio.astype(np.float32)
+    rms = float(np.sqrt(np.mean(samples * samples)))
+    peak = float(np.max(np.abs(samples)))
+    return rms, peak
+
+
+def sync_motors_from_pcm_chunk(
+    audio,
+    *,
+    mouth_threshold: int | None = None,
+    tail_threshold: int | None = None,
+    chunk_ms: int = 40,
+    enable_mouth: bool = True,
+    enable_tail: bool = True,
+    enable_head: bool = True,
 ):
-    global _last_flap, _mouth_open_until, _last_rms
-    now = time.time()
+    """
+    Drive mouth, tail, and head from the same PCM chunk as the speakers.
+    Tuned for Piper TTS (quieter than song stems).
+    """
+    global \
+        _last_flap, \
+        _mouth_open_until, \
+        _last_rms, \
+        _sync_smoothed_rms, \
+        _last_tail_flap, \
+        _last_head_pulse
 
     if audio.size == 0:
         return
 
-    rms = np.sqrt(np.mean(audio.astype(np.float32) ** 2))
-    peak = np.max(np.abs(audio))
+    try:
+        from .config import (
+            MOTOR_SYNC_HEAD,
+            MOTOR_SYNC_TAIL,
+            MOUTH_FLAP_THRESHOLD,
+            TAIL_FLAP_THRESHOLD,
+        )
+    except Exception:
+        MOUTH_FLAP_THRESHOLD = 350
+        TAIL_FLAP_THRESHOLD = 900
+        MOTOR_SYNC_HEAD = True
+        MOTOR_SYNC_TAIL = True
 
-    # Smooth out sudden fluctuations
-    if '_last_rms' not in globals():
-        _last_rms = rms
-    alpha = 1  # smoothing factor
-    rms = alpha * rms + (1 - alpha) * _last_rms
+    if mouth_threshold is None:
+        mouth_threshold = MOUTH_FLAP_THRESHOLD
+    if tail_threshold is None:
+        tail_threshold = TAIL_FLAP_THRESHOLD
+
+    if not MOTOR_SYNC_TAIL:
+        enable_tail = False
+    if not MOTOR_SYNC_HEAD:
+        enable_head = False
+
+    now = time.time()
+    rms, peak = _pcm_levels(audio)
+
+    # Envelope follower for beat/emphasis detection
+    if _sync_smoothed_rms <= 0:
+        _sync_smoothed_rms = rms
+    else:
+        _sync_smoothed_rms = 0.82 * _sync_smoothed_rms + 0.18 * rms
     _last_rms = rms
 
-    # If too quiet and mouth might be open, stop motor
-    if rms < threshold / 2 and now >= _mouth_open_until:
-        stop_mouth()
-        return
-
-    if rms <= threshold or (now - _last_flap) < min_flap_gap:
-        return
+    quiet = rms < mouth_threshold * 0.45
+    if quiet and now >= _mouth_open_until:
+        if enable_mouth:
+            stop_mouth()
 
     normalized = np.clip(rms / 32768.0, 0.0, 1.0)
-    dyn_range = peak / (rms + 1e-5)
+    emphasis = peak / (rms + 1e-5)
 
-    # Flap speed and duration scaling
-    speed = int(np.clip(np.interp(normalized, [0.005, 0.15], [25, 100]), 25, 100))
-    duration_ms = np.interp(normalized, [0.005, 0.15], [15, 70])
+    # --- Mouth (lip sync) ---
+    if enable_mouth and rms > mouth_threshold and (now - _last_flap) >= 0.07:
+        speed = int(np.clip(np.interp(normalized, [0.004, 0.12], [30, 100]), 30, 100))
+        duration_ms = float(np.interp(normalized, [0.004, 0.12], [20, min(70, chunk_ms)]))
+        duration = (duration_ms / 1000.0) * _mouth_duration_scale()
+        duration = max(0.03, min(duration, chunk_ms / 1000.0))
 
-    duration_ms = np.clip(duration_ms, 15, chunk_ms)
-    duration = duration_ms / 1000.0
+        _last_flap = now
+        _mouth_open_until = now + duration
+        move_mouth(speed, duration, brake=False)
 
-    duration *= _articulation_multiplier()
+    # --- Tail (sass / emphasis on louder syllables) ---
+    if (
+        enable_tail
+        and not head_out
+        and rms > tail_threshold
+        and rms >= _sync_smoothed_rms * 1.08
+        and (now - _last_tail_flap) >= 0.28
+    ):
+        tail_dur = float(np.interp(normalized, [0.01, 0.18], [0.12, 0.28]))
+        _last_tail_flap = now
+        move_tail_async(duration=tail_dur)
 
-    _last_flap = now
-    _mouth_open_until = now + duration
+    # --- Head (occasional nod on punchy consonants / peaks) ---
+    if (
+        enable_head
+        and not head_out
+        and rms > mouth_threshold * 1.4
+        and emphasis > 2.2
+        and (now - _last_head_pulse) >= 0.75
+        and (now - _last_tail_flap) >= 0.15
+    ):
+        nod_dur = float(np.interp(emphasis, [2.2, 5.0], [0.10, 0.18]))
+        _last_head_pulse = now
+        pulse_head(duration=nod_dur, speed_percent=int(np.clip(65 + normalized * 35, 65, 95)))
 
-    move_mouth(speed, duration, brake=False)
+
+def flap_from_pcm_chunk(
+    audio, threshold=1500, min_flap_gap=0.15, chunk_ms=40, sample_rate=24000
+):
+    """Mouth-only sync (song vocals path). min_flap_gap/sample_rate kept for API compat."""
+    _ = min_flap_gap, sample_rate
+    sync_motors_from_pcm_chunk(
+        audio,
+        mouth_threshold=threshold,
+        chunk_ms=chunk_ms,
+        enable_mouth=True,
+        enable_tail=False,
+        enable_head=False,
+    )
 
 
 # === Interlude Behavior ===
@@ -415,6 +536,7 @@ def _pin_is_active(pin: int) -> bool:
 
 def stop_all_motors():
     global _gpio_active
+    reset_motor_sync_state()
     logger.info("Stopping all motors", "🛑")
     if not _gpio_active:
         return  # GPIO handle already closed, skip

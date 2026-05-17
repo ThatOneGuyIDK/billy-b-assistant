@@ -69,7 +69,12 @@ TTS_VOCAL_DARKEN = float(os.getenv("TTS_VOCAL_DARKEN", "0.35"))
 TTS_VOCAL_DRIVE = float(os.getenv("TTS_VOCAL_DRIVE", "0.18"))
 TTS_VOCAL_LOWPASS_HZ = float(os.getenv("TTS_VOCAL_LOWPASS_HZ", "4200"))
 TTS_VOCAL_LIMIT = float(os.getenv("TTS_VOCAL_LIMIT", "0.92"))
-MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))
+MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "1"))
+# Motor lip-sync (Piper TTS is quieter than song stems — use lower thresholds)
+MOUTH_FLAP_THRESHOLD = int(os.getenv("MOUTH_FLAP_THRESHOLD", "350"))
+TAIL_FLAP_THRESHOLD = int(os.getenv("TAIL_FLAP_THRESHOLD", "900"))
+MOTOR_SYNC_HEAD = os.getenv("MOTOR_SYNC_HEAD", "true").lower() == "true"
+MOTOR_SYNC_TAIL = os.getenv("MOTOR_SYNC_TAIL", "true").lower() == "true"
 TURN_EAGERNESS = os.getenv("TURN_EAGERNESS", "high").strip().lower()
 if TURN_EAGERNESS not in {"low", "medium", "high"}:
     TURN_EAGERNESS = "medium"
