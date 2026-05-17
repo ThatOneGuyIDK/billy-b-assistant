@@ -318,14 +318,13 @@ def reset_motor_sync_state():
 
 
 def _mouth_duration_scale():
-    """Higher MOUTH_ARTICULATION = snappier/shorter flaps (inverse of old behavior)."""
+    """Match legacy flap timing: higher MOUTH_ARTICULATION = longer mouth pulses."""
     try:
         from .config import MOUTH_ARTICULATION
 
-        articulation = max(1, min(10, int(MOUTH_ARTICULATION)))
+        return max(1.0, min(10.0, float(MOUTH_ARTICULATION)))
     except Exception:
-        articulation = 1
-    return max(0.2, 1.0 / articulation)
+        return 5.0
 
 
 def _pcm_levels(audio: np.ndarray) -> tuple[float, float]:

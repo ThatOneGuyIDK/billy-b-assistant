@@ -69,7 +69,7 @@ TTS_VOCAL_DARKEN = float(os.getenv("TTS_VOCAL_DARKEN", "0.35"))
 TTS_VOCAL_DRIVE = float(os.getenv("TTS_VOCAL_DRIVE", "0.18"))
 TTS_VOCAL_LOWPASS_HZ = float(os.getenv("TTS_VOCAL_LOWPASS_HZ", "4200"))
 TTS_VOCAL_LIMIT = float(os.getenv("TTS_VOCAL_LIMIT", "0.92"))
-MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "1"))
+MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))
 # Motor lip-sync (Piper TTS is quieter than song stems — use lower thresholds)
 MOUTH_FLAP_THRESHOLD = int(os.getenv("MOUTH_FLAP_THRESHOLD", "350"))
 TAIL_FLAP_THRESHOLD = int(os.getenv("TAIL_FLAP_THRESHOLD", "900"))
@@ -102,6 +102,8 @@ SERVER_VAD_PARAMS = {
 
 # === GPIO Config ===
 BUTTON_PIN = 27 if BILLY_PINS == "legacy" else 24  # legacy=pin 13, new=pin 18
+# If head and mouth wires are swapped on the driver board, set INVERT_HEAD_MOUTH=true in .env
+INVERT_HEAD_MOUTH = os.getenv("INVERT_HEAD_MOUTH", "false").lower() == "true"
 
 # === Software Config ===
 FLAP_ON_BOOT = os.getenv("FLAP_ON_BOOT", "false").lower() == "true"
@@ -116,8 +118,3 @@ try:
     MAIN_LOOP = asyncio.get_event_loop()
 except RuntimeError:
     MAIN_LOOP = None
-
-    # === Motor mapping tweaks ===
-    # If your wiring has the head and mouth pins swapped, set this to true
-    # in your .env to invert the two pins without editing code.
-    INVERT_HEAD_MOUTH = os.getenv("INVERT_HEAD_MOUTH", "false").lower() == "true"

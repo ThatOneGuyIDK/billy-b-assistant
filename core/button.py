@@ -122,7 +122,7 @@ def _preload_runtime_once(force: bool = False):
 
 
 def _announce_ready_prompt_once():
-    """Speak a short readiness prompt after preload is complete."""
+    """Speak a short readiness prompt after preload (non-blocking — does not hold the button loop)."""
     try:
         from .realtime_ai_provider import voice_provider_registry
 
@@ -237,7 +237,6 @@ def on_button():
         # Preload should already be done at startup; retry here if startup preload failed.
         _preload_runtime_once()
         
-        # Clear the playback done event so session waits for wake-up sound
         audio.playback_done_event.clear()
         logger.info("🔧 playback_done_event cleared (waiting for wake-up sound)", "🔧")
         logger.info("🔔 Playing wake-up sound before opening mic...", "🔔")

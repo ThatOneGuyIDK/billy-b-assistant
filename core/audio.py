@@ -273,7 +273,10 @@ def playback_worker(chunk_ms):
                             sub = mono[i : i + chunk_len]
                             if len(sub) == 0:
                                 continue
-                            sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                            try:
+                                sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                            except Exception as motor_err:
+                                logger.warning(f"Motor sync skipped: {motor_err}", "⚠️")
                             stream.write(_resample_24k_mono_to_48k_stereo(sub))
                             time.sleep(0.001)
 
@@ -285,7 +288,10 @@ def playback_worker(chunk_ms):
                         sub = mono[i : i + chunk_len]
                         if len(sub) == 0:
                             continue
-                        sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                        try:
+                            sync_motors_from_pcm_chunk(sub, chunk_ms=chunk_ms)
+                        except Exception as motor_err:
+                            logger.warning(f"Motor sync skipped: {motor_err}", "⚠️")
                         stream.write(_resample_24k_mono_to_48k_stereo(sub))
                         time.sleep(0.001)
 
@@ -422,6 +428,27 @@ def playback_worker_aplay(chunk_ms):
 def _should_use_aplay():
     """Determine if aplay should be used for playback."""
     return USE_APLAY == "true"
+
+
+def wait_for_playback_drain(timeout: float = 120.0) -> bool:
+    """Wait until all enqueued playback chunks have finished."""
+    start = time.time()
+    while playback_queue.unfinished_tasks > 0:
+        if time.time() - start > timeout:
+            logger.warning("Playback queue drain timed out", "⚠️")
+            return False
+        time.sleep(0.02)
+    return True
+
+
+def signal_playback_idle():
+    """Mark speaker output as idle so sessions can open the mic."""
+    playback_done_event.set()
+
+
+def signal_playback_busy():
+    """Mark speaker output as busy (mic should wait)."""
+    playback_done_event.clear()
 
 
 def ensure_playback_worker_started(chunk_ms):
@@ -574,6 +601,7 @@ def play_random_wake_up_clip():
 
     if not clips:
         print("⚠️ No wake-up clips found in any directory.")
+        playback_done_event.set()
         return None
 
     clip = random.choice(clips)
@@ -606,7 +634,6 @@ def play_random_wake_up_clip():
     elapsed = time.time() - start_time
     logger.info(f"🔧 Wake-up sound playback completed in {elapsed:.2f}s", "🔧")
 
-    # Once done, set the event
     playback_done_event.set()
     logger.info("🔧 playback_done_event SET (wake-up sound finished)", "🔧")
 
