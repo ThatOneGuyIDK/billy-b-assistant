@@ -4,22 +4,34 @@ Uses local models for speech-to-text, LLM, and text-to-speech
 """
 import asyncio
 import base64
-import io
 import json
-import queue
 import re
-import wave
 from typing import Any, Optional
 
 import numpy as np
 import requests
+from scipy.signal import butter, sosfilt
+import os
+import time
+import wave
 
 from ..config import (
     DEBUG_MODE,
+    OLLAMA_NUM_CTX,
+    OLLAMA_NUM_PREDICT,
+    OLLAMA_TEMPERATURE,
     TTS_LENGTH_SCALE,
+    TTS_VOCAL_DARKEN,
+    TTS_VOCAL_DRIVE,
+    TTS_VOCAL_LIMIT,
+    TTS_VOCAL_LOWPASS_HZ,
+    TTS_VOCAL_PROCESSING,
     TTS_NOISE_SCALE,
     TTS_NOISE_W,
     TTS_SENTENCE_SILENCE,
+    WHISPER_BEST_OF,
+    WHISPER_BEAM_SIZE,
+    WHISPER_VAD_FILTER,
 )
 from ..logger import logger
 from ..realtime_ai_provider import RealtimeAIProvider
@@ -80,6 +92,42 @@ def _clean_tts_text(text: str) -> str:
         text += '.'
 
     return text
+
+
+_VOCAL_COLOR_FILTER = None
+
+
+def _apply_vocal_color(audio_bytes: bytes, sample_rate: int = 24000) -> bytes:
+    """Darken and thicken TTS audio to make the voice sound rougher and fuller."""
+    if not TTS_VOCAL_PROCESSING or not audio_bytes:
+        return audio_bytes
+
+    audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+    if audio.size == 0:
+        return audio_bytes
+
+    global _VOCAL_COLOR_FILTER
+    if _VOCAL_COLOR_FILTER is None:
+        nyquist = sample_rate / 2.0
+        cutoff_hz = min(max(TTS_VOCAL_LOWPASS_HZ, 300.0), nyquist * 0.95)
+        _VOCAL_COLOR_FILTER = butter(
+            2,
+            cutoff_hz / nyquist,
+            btype="low",
+            output="sos",
+        )
+
+    low_band = sosfilt(_VOCAL_COLOR_FILTER, audio)
+
+    # Blend in the darker band, then saturate slightly for a rougher texture.
+    blended = audio * (1.0 - TTS_VOCAL_DARKEN) + low_band * TTS_VOCAL_DARKEN
+    driven = np.tanh(blended / 32768.0 * (1.0 + TTS_VOCAL_DRIVE * 6.0)) * 32768.0
+
+    peak = float(np.max(np.abs(driven))) if driven.size else 0.0
+    if peak > 0:
+        driven *= min(1.0, (32767.0 * TTS_VOCAL_LIMIT) / peak)
+
+    return np.clip(driven, -32768, 32767).astype(np.int16).tobytes()
 
 
 class LocalSession:
@@ -213,13 +261,8 @@ class LocalSession:
         if not self.conversation_history:
             return
 
-        # Build messages with TTS optimization
-        from ..config import TTS_OPTIMIZATION_PROMPT
-        instructions_with_tts = self.instructions
-        if TTS_OPTIMIZATION_PROMPT:
-            instructions_with_tts += f"\n\n{TTS_OPTIMIZATION_PROMPT}"
-        
-        messages = [{"role": "system", "content": instructions_with_tts}]
+        # Build messages (TTS optimization prompt removed)
+        messages = [{"role": "system", "content": self.instructions}]
         messages.extend(self.conversation_history)
 
         try:
@@ -263,16 +306,16 @@ class LocalSession:
 
             def _stream_ollama():
                 try:
-                    with requests.post(
+                    with self.provider._ollama_session.post(
                         f"{self.provider.ollama_host}/api/chat",
                         json={
                             "model": self.provider.ollama_model,
                             "messages": messages,
                             "stream": True,
                             "options": {
-                                "num_predict": 180,  # Longer responses while still reasonably fast
-                                "temperature": 0.5,
-                                "num_ctx": 2048,
+                                "num_predict": OLLAMA_NUM_PREDICT,
+                                "temperature": OLLAMA_TEMPERATURE,
+                                "num_ctx": OLLAMA_NUM_CTX,
                             },
                         },
                         stream=True,
@@ -394,7 +437,7 @@ class LocalProvider(RealtimeAIProvider):
     def __init__(
         self,
         ollama_host: str = "http://localhost:11434",
-        ollama_model: str = "llama2:latest",
+        ollama_model: str = "llama3.2:latest",
         whisper_model: str = "base",
         tts_voice: str = "en_US-lessac-medium",
     ):
@@ -407,6 +450,7 @@ class LocalProvider(RealtimeAIProvider):
         # Lazy imports for optional dependencies
         self._whisper_model = None
         self._tts_engine = None
+        self._ollama_session = requests.Session()
 
         logger.info(
             f"LocalProvider initialized: Ollama={ollama_host}, Model={ollama_model}",
@@ -472,8 +516,28 @@ class LocalProvider(RealtimeAIProvider):
 
         # Check Ollama availability
         try:
-            response = requests.get(f"{self.ollama_host}/api/tags", timeout=5)
+            response = self._ollama_session.get(f"{self.ollama_host}/api/tags", timeout=5)
             if response.status_code == 200:
+                available_models = []
+                try:
+                    tags_payload = response.json()
+                    if isinstance(tags_payload, dict):
+                        for model_info in tags_payload.get("models", []):
+                            if not isinstance(model_info, dict):
+                                continue
+                            model_name = model_info.get("name") or model_info.get("model")
+                            if model_name:
+                                available_models.append(str(model_name))
+                except Exception:
+                    available_models = []
+
+                resolved_model = self._resolve_ollama_model(available_models)
+                if resolved_model != self.ollama_model:
+                    logger.warning(
+                        f"Ollama model '{self.ollama_model}' is not available. Falling back to '{resolved_model}'."
+                    )
+                    self.ollama_model = resolved_model
+
                 logger.success("Ollama connection successful")
             else:
                 logger.warning(f"Ollama responded with status {response.status_code}")
@@ -570,6 +634,30 @@ class LocalProvider(RealtimeAIProvider):
                 logger.error(f"Failed to load Piper TTS: {e}")
                 raise
 
+    def _resolve_ollama_model(self, available_models: list[str]) -> str:
+        """Choose the best available Ollama model for this session."""
+        if not available_models:
+            return self.ollama_model
+
+        available_lookup = {model.strip(): model.strip() for model in available_models if model}
+        configured_model = self.ollama_model.strip()
+
+        if configured_model in available_lookup:
+            return available_lookup[configured_model]
+
+        preferred_models = [
+            "llama3.2:latest",
+            "llama3.1:8b",
+            "mistral:latest",
+            "phi3:mini",
+            "llama2:latest",
+        ]
+        for model_name in preferred_models:
+            if model_name in available_lookup:
+                return available_lookup[model_name]
+
+        return available_models[0].strip()
+
     async def _speech_to_text(self, audio_bytes: bytes) -> str:
         """Convert audio to text using Whisper"""
         self._ensure_whisper_loaded()
@@ -587,6 +675,19 @@ class LocalProvider(RealtimeAIProvider):
                 logger.info(
                     f"Whisper skipped: audio too quiet (peak={peak}, rms={rms:.2f})"
                 )
+                # Save the near-silent audio so it can be inspected offline
+                try:
+                    debug_dir = os.path.join("sounds", "response-history")
+                    os.makedirs(debug_dir, exist_ok=True)
+                    fname = os.path.join(debug_dir, f"whisper-skip-{int(time.time())}.wav")
+                    with wave.open(fname, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(24000)
+                        wf.writeframes(audio_bytes)
+                    logger.info(f"Saved skipped (too-quiet) audio to {fname}")
+                except Exception:
+                    pass
                 return ""
 
             audio_np = audio_i16.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
@@ -595,10 +696,10 @@ class LocalProvider(RealtimeAIProvider):
                 return self._whisper_model.transcribe(
                     audio_np,
                     language="en",
-                    beam_size=10,  # Increased for better accuracy
-                    best_of=10,    # Increased for better accuracy
+                    beam_size=WHISPER_BEAM_SIZE,
+                    best_of=WHISPER_BEST_OF,
                     temperature=0.0,  # Deterministic output
-                    vad_filter=True,  # Filter silence
+                    vad_filter=WHISPER_VAD_FILTER,
                     condition_on_previous_text=False,  # Don't hallucinate
                 )
 
@@ -608,9 +709,35 @@ class LocalProvider(RealtimeAIProvider):
             text = " ".join([segment.text for segment in segments]).strip()
 
             logger.debug(f"Whisper transcribed: '{text}'")
+            if not text:
+                # Save the raw audio for offline inspection when transcription is empty
+                try:
+                    debug_dir = os.path.join("sounds", "response-history")
+                    os.makedirs(debug_dir, exist_ok=True)
+                    fname = os.path.join(debug_dir, f"whisper-failed-{int(time.time())}.wav")
+                    with wave.open(fname, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(24000)
+                        wf.writeframes(audio_bytes)
+                    logger.info(f"Saved failed Whisper audio to {fname}")
+                except Exception:
+                    pass
             return text
         except Exception as e:
             logger.error(f"Speech-to-text failed: {e}")
+            try:
+                debug_dir = os.path.join("sounds", "response-history")
+                os.makedirs(debug_dir, exist_ok=True)
+                fname = os.path.join(debug_dir, f"whisper-exception-{int(time.time())}.wav")
+                with wave.open(fname, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(24000)
+                    wf.writeframes(audio_bytes)
+                logger.info(f"Saved exception Whisper audio to {fname}")
+            except Exception:
+                pass
             return ""
 
     def _text_to_speech_blocking(self, text: str, voice: str) -> bytes:
@@ -684,8 +811,10 @@ class LocalProvider(RealtimeAIProvider):
                 resampled = resample_poly(audio_f32, target_rate, source_rate)
                 audio_array = np.clip(resampled, -32768, 32767).astype(np.int16)
 
+            audio_bytes = _apply_vocal_color(audio_array.tobytes(), sample_rate=24000)
+
             logger.info(f"🔊 TTS generated {len(audio_array)} samples at 24kHz")
-            return audio_array.tobytes()
+            return audio_bytes
 
         except Exception as e:
             logger.error(f"TTS generation failed: {e}")

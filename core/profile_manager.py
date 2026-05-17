@@ -106,16 +106,10 @@ class UserProfile:
 
     def _create_new_profile(self) -> dict[str, Any]:
         """Create a new user profile."""
-        # Get the currently active persona instead of defaulting to 'default'
-        from .persona_manager import persona_manager
-
-        current_persona = persona_manager.current_persona
-
         data = {
             'USER_INFO': {
                 'name': self.name,
                 'display_name': self.name,
-                'preferred_persona': current_persona,
                 'created_date': datetime.now().isoformat(),
                 'last_seen': datetime.now().isoformat(),
                 'interaction_count': '0',
@@ -249,12 +243,6 @@ class UserProfile:
             "👤",
         )
 
-    def set_preferred_persona(self, persona: str):
-        """Set the user's preferred Billy persona."""
-        self.data['USER_INFO']['preferred_persona'] = persona
-        self._save_profile()
-        logger.info(f"Set {self.name}'s preferred persona to {persona}", "🎭")
-
     def set_display_name(self, display_name: str):
         """Set the user's display name."""
         self.data['USER_INFO']['display_name'] = display_name
@@ -333,7 +321,7 @@ class UserProfile:
 
     def get_context_string(self) -> str:
         """Get formatted context string for AI prompt."""
-        context = f"\n[USER: {self.name} | PERSONA: {self.data['USER_INFO'].get('preferred_persona', 'default')} | BOND: {self.data['USER_INFO'].get('bond_level', 'new')}]\n"
+        context = f"\n[USER: {self.name} | BOND: {self.data['USER_INFO'].get('bond_level', 'new')}]\n"
 
         memories = self.get_memories(3)  # Reduced from 5 to 3
         if memories:
@@ -457,21 +445,6 @@ class UserProfileManager:
             else:
                 logger.info("Starting in guest mode", "👤")
                 self.clear_current_user()
-                # Load the guest profile's preferred persona for guest mode
-                try:
-                    guest_profile = self.identify_user("guest", "high")
-                    if guest_profile:
-                        preferred_persona = guest_profile.data['USER_INFO'].get(
-                            'preferred_persona', 'default'
-                        )
-                        from .persona_manager import persona_manager
-
-                        persona_manager.switch_persona(preferred_persona)
-                        logger.info(
-                            f"Loaded guest preferred persona: {preferred_persona}", "🎭"
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to load guest preferred persona: {e}")
         except Exception as e:
             logger.warning(f"Failed to load default user: {e}", "⚠️")
             self.clear_current_user()

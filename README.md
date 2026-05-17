@@ -5,8 +5,6 @@ The **Billy Bass Assistant** is a Raspberry Pi–powered voice assistant embedde
 > **This project is still in BETA.** Things might crash, get stuck or make Billy scream uncontrollably (ok that last part maybe not literally but you get the point). Proceed with fishy caution.
 
 ![Billy Bathroom](./docs/images/billy_bathroom.jpeg)
-![Billy UI](./docs/images/Web-UI.png)
-<img src="./docs/images/Web-UI-Mobile.png" alt="Billy UI Mobile" style="width: 33%;" />
 ---
 
 ## Features
@@ -18,14 +16,6 @@ The **Billy Bass Assistant** is a Raspberry Pi–powered voice assistant embedde
 - Support for the Modern Billy hardware version with 2 motors as well as the Classic Billy hardware version (3 motors)
 - Custom song playback with coordinated mouth and tail animations
 - Home Assistant command passthrough using the Conversation API
-- Lightweight web UI:
-  - User profile management with memory system
-  - Multiple personas with configurable voices and traits
-  - Song manager for custom songs with upload and playback configuration
-  - Adjust settings like custom Hostname and Port configuration
-  - View debug logs
-  - Start/stop/restart Billy
-  - Export/Import of settings, personas, and user profiles
 - MQTT support:
   - sensor with status updates of Billy (idle, speaking, listening)
   - `billy/say` topic for triggering spoken messages remotely
@@ -319,86 +309,11 @@ sudo systemctl status billy.service
 journalctl -u billy-b-assistant.service -f
 ```
 
-### Run The Web UI As A Service
-
-If you want the web interface to always be available, copy the service file from the repository to the `/etc/systemd/system` directory:
-
-```bash
-sudo cp setup/system/billy-webconfig.service /etc/systemd/system/billy-webconfig.service
-```
-
-Adjust the username/paths if needed:
-
-```bash
-sudo nano /etc/systemd/system/billy-webconfig.service
-```
-
-```ini
-[Unit]
-Description=Billy Web Configuration Server
-After=network.target
-
-[Service]
-WorkingDirectory=/home/pi/billy-b-assistant
-ExecStart=/home/pi/billy-b-assistant/venv/bin/python /home/pi/billy-b-assistant/webconfig/server.py
-Restart=on-failure
-User=pi
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-
-```bash
-sudo setcap 'cap_net_bind_service=+ep' /usr/bin/python3.11
-sudo systemctl daemon-reload
-sudo systemctl enable billy-webconfig.service
-sudo systemctl start billy-webconfig.service
-```
-
-To view status and logs:
-
-```bash
-sudo systemctl status billy-webconfig.service
-journalctl -u billy-webconfig.service -f
-```
-
-Visit `http://billy.local` anytime to reconfigure Billy!
-
----
-
 ## I. Run It
 
 Billy should now boot automatically into standby mode. Press the physical button to start a voice session. Enjoy!
 
 ---
-
-## J. Web Configuration Interface
-
-Billy includes a lightweight Web UI for editing settings, debugging logs, and managing the assistant service without touching the terminal.
-
-### Features
-
-- Edit `.env` configuration values (e.g., API keys, MQTT)
-- View and edit `persona.ini` (traits, backstory, instructions)
-- Control the Billy system service (start, stop, restart)
-- View live logs from the assistant process
-
-### How to Use
-
-See **H. Systemd Services** to automatically start the web server or, to run the web server manually (from the project root):
-
-```bash
-python3 webconfig/server.py
-```
-
-Enter the your pi's hostname + .local in your browser (replace `billy` if you have set a custom hostname):
-
-```bash
-http://billy.local
-```
-
 ### Example `.env` File
 
 This file is used to configure your environment, including the [OpenAI API key](https://platform.openai.com/api-keys) and (optional) mqtt settings. It can also be used to overwrite some of the default config settings (like the voice of billy) that you can find in `config.py`.
@@ -496,15 +411,13 @@ You can tweak this to reflect a different vibe: poetic, mystical, overly formal,
 
 ### Custom Songs
 
-Billy supports a "song mode" where he performs coordinated audio + motion playback. You can manage custom songs directly through the **Web UI** by clicking the **Songs** button in the header.
+Billy supports a "song mode" where he performs coordinated audio + motion playback. Manage custom songs directly in the `custom_songs/` directory over SSH.
 
 #### Using the Song Manager
 
-1. **Access the Song Manager**: Click the **Songs** button (🎵) in the web UI header
+1. **Copy Example Song**: Duplicate an example song into your `custom_songs/` directory over SSH
 
-2. **Copy Example Song**: Click "Copy Example" to create a template song in your `custom_songs/` directory
-
-3. **Create or Edit a Song**:
+2. **Create or Edit a Song**:
    - Click a song to edit it, or create a new one
    - Upload audio files:
      - `full.wav` - Main audio (played to speakers)
@@ -520,9 +433,9 @@ Billy supports a "song mode" where he performs coordinated audio + motion playba
      - **Head Moves**: Comma-separated list of `time:duration` values (e.g., `4.0:1,8.0:0,12.0:1`)
      - **Half Tempo Tail Flap**: Toggle to flap tail on every 2nd beat
 
-4. **Preview Audio**: Use the play buttons to preview each audio file before saving
+3. **Preview Audio**: Play the stems locally to verify timing before copying them into place
 
-5. **Save**: Click "Save Song" to store your configuration
+4. **Save**: Update the song metadata file to store your configuration
 
 #### Audio File Requirements
 
@@ -574,7 +487,7 @@ Billy will forward your command to Home Assistant and speak back the response.
    - In Home Assistant, go to **Profile → Long-Lived Access Tokens → Create Token**  
    - Name it something like `billy-assistant` and copy the token.
 
-2. Configure using the Web UI or add these values to your `.env`:
+2. Add these values to your `.env`:
 
     ```ini
     HA_URL=http://homeassistant.local:8123
@@ -648,6 +561,4 @@ Pull requests are welcome! If you have an idea for a new feature, bug fix, or im
 
 Enjoying the project? Feel free to leave a small tip, totally optional, but much appreciated!
 
-![Paypal](./webconfig/static/images/qrcode.png)
-
-https://paypal.me/thomkoopman050
+Donate via PayPal: https://paypal.me/thomkoopman050

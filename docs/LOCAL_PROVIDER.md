@@ -54,9 +54,18 @@ REALTIME_AI_PROVIDER=local
 # Optional: Configure Ollama settings
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=llama3.2:latest
+OLLAMA_NUM_PREDICT=96
+OLLAMA_NUM_CTX=1536
+OLLAMA_TEMPERATURE=0.4
 
 # Optional: Whisper model size (tiny, base, small, medium, large)
 WHISPER_MODEL=base
+WHISPER_BEAM_SIZE=1
+WHISPER_BEST_OF=1
+
+# Optional: Delay before the thinking bubble appears
+# Set to 0 to disable it for very fast systems
+THINKING_SOUND_DELAY_MS=160
 ```
 
 ### Or Just Remove OpenAI Key
@@ -94,8 +103,10 @@ If you remove `OPENAI_API_KEY` from your `.env`, Billy will automatically use th
 
 1. **Use smaller models** - 3B models are fast and good enough for conversation
 2. **GPU acceleration** - Ollama automatically uses GPU if available
-3. **Adjust Whisper model** - Use `tiny` or `base` for speed, `small` for quality
-4. **Quantization** - Ollama models are pre-quantized for efficiency
+3. **Reduce Whisper search width** - Keep `WHISPER_BEAM_SIZE=1` and `WHISPER_BEST_OF=1` for the fastest local turns
+4. **Adjust Whisper model** - Use `tiny` or `base` for speed, `small` for quality
+5. **Quantization** - Ollama models are pre-quantized for efficiency
+6. **Trim the thinking cue** - Set `THINKING_SOUND_DELAY_MS=0` if you want the fastest possible turn start on a Pi 5
 
 ## Troubleshooting
 
@@ -129,8 +140,8 @@ ollama pull llama3.2:1b
 
 ## Current Limitations
 
-- TTS not yet implemented (returns silence placeholder)
-- No streaming responses yet (full response generation)
+- Piper TTS works locally, but voice availability depends on installed models
+- Streaming responses are enabled, but local model speed still depends heavily on Ollama and Whisper settings
 - Function calling needs testing with local models
 
 ## Contributing

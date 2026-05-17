@@ -5,16 +5,9 @@ scipy
 gpiozero
 python-dotenv
 pydub
-paho-mqtt
 requests
-openai
-aiohttp
-flask
-# lgpio - skipped for laptop testing, GPIO is auto-mocked
 packaging
 
-# Local AI Provider Dependencies (optional)
-# Uncomment to enable local-only operation without OpenAI
-# faster-whisper
-# ollama-python
-# piper-tts
+# Local AI (Whisper STT, Ollama LLM, Piper TTS)
+faster-whisper
+piper-tts

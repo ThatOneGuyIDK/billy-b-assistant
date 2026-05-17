@@ -67,7 +67,7 @@ _thinking_sound_cache: bytes | None = None
 _thinking_sound_mtime: float = -1.0
 
 
-def _load_thinking_sound_pcm(max_ms: int = 220) -> bytes | None:
+def _load_thinking_sound_pcm(max_ms: int = 120) -> bytes | None:
     """Load and cache custom thinking sound as 24kHz mono 16-bit PCM bytes."""
     global _thinking_sound_cache, _thinking_sound_mtime
 
@@ -104,6 +104,10 @@ def _load_thinking_sound_pcm(max_ms: int = 220) -> bytes | None:
         if sample_rate != PROVIDER_OUTPUT_RATE and len(audio_i16) > 0:
             target_len = int(len(audio_i16) * PROVIDER_OUTPUT_RATE / sample_rate)
             audio_i16 = resample(audio_i16.astype(np.float32), target_len).astype(np.int16)
+
+        max_samples = int(PROVIDER_OUTPUT_RATE * (max_ms / 1000.0))
+        if max_samples > 0 and len(audio_i16) > max_samples:
+            audio_i16 = audio_i16[:max_samples]
 
         _thinking_sound_cache = audio_i16.tobytes()
         _thinking_sound_mtime = mtime
@@ -589,31 +593,10 @@ def play_random_wake_up_clip():
     """Select and enqueue a random wake-up WAV file with mouth movement."""
     clips = []
 
-    # First, try to get current persona and check appropriate directory
-    try:
-        from .persona_manager import persona_manager
-
-        current_persona = persona_manager.current_persona
-        if current_persona and current_persona != "default":
-            # For non-default personas, check persona-specific directory
-            persona_wakeup_dir = os.path.join("personas", current_persona, "wakeup")
-            if os.path.exists(persona_wakeup_dir):
-                clips = glob.glob(os.path.join(persona_wakeup_dir, "*.wav"))
-                if clips:
-                    print(f"🎭 Using wake-up clips from persona: {current_persona}")
-        elif current_persona == "default":
-            # For default persona, use the custom folder
-            clips = glob.glob(os.path.join(WAKE_UP_DIR, "*.wav"))
-            if clips:
-                print("🔧 Using custom wake-up clips for default persona")
-    except Exception as e:
-        print(f"⚠️ Failed to get current persona: {e}")
-
-    # If no clips found yet, check custom folder as fallback
-    if not clips:
-        clips = glob.glob(os.path.join(WAKE_UP_DIR, "*.wav"))
-        if clips:
-            print("🔧 Using custom wake-up clips (fallback)")
+    # Search custom wake-up directory first, fallback to default directory
+    clips = glob.glob(os.path.join(WAKE_UP_DIR, "*.wav"))
+    if clips:
+        print("🔧 Using custom wake-up clips (custom WAKE_UP_DIR)")
 
     # If still no clips, fall back to default
     if not clips:
@@ -706,7 +689,6 @@ async def play_song(song_name, interrupt_event=None):
 
     from core import audio
     from core.movements import stop_all_motors
-    from core.mqtt import mqtt_publish
     from core.song_manager import song_manager
 
     reset_for_new_song()
@@ -724,7 +706,7 @@ async def play_song(song_name, interrupt_event=None):
 
     if not song_metadata:
         print(f"❌ Song not found: {song_name}")
-        print(f"💡 Tip: Use the web UI to copy example songs or create new ones")
+        print(f"💡 Tip: Copy an example song into custom_songs/ over SSH to create new ones")
         return
 
     # Get the actual song directory path using the song name (directory name)
@@ -737,7 +719,7 @@ async def play_song(song_name, interrupt_event=None):
     # Double-check the directory exists
     if not os.path.exists(SONG_DIR):
         print(f"❌ Song directory not found: {SONG_DIR}")
-        print(f"💡 Tip: Use the web UI to copy example songs or create new ones")
+        print(f"💡 Tip: Copy an example song into custom_songs/ over SSH to create new ones")
         return
 
     MAIN_AUDIO = os.path.join(SONG_DIR, "full.wav")
@@ -840,7 +822,6 @@ async def play_song(song_name, interrupt_event=None):
     audio.song_mode = True
     ensure_playback_worker_started(CHUNK_MS)
 
-    mqtt_publish("billy/state", "playing_song")
     print(f"\n🎧 Playing {song_name} with mouth (vocals) and tail (drums) flaps")
 
     try:
@@ -948,7 +929,6 @@ async def play_song(song_name, interrupt_event=None):
     finally:
         audio.song_mode = False
         stop_all_motors()
-        mqtt_publish("billy/state", "idle")
         print("🎶 Song finished, waiting for button press.")
 
 

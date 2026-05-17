@@ -42,7 +42,6 @@ from core.audio import playback_queue
 # --- Reload logger level after environment is loaded ---
 from core.logger import reload_log_level
 from core.movements import start_motor_watchdog
-from core.mqtt import start_mqtt, stop_mqtt
 
 
 current_level = reload_log_level()
@@ -55,21 +54,12 @@ def signal_handler(sig, frame):
     from core.movements import cleanup_gpio
 
     cleanup_gpio()
-    stop_mqtt()
     sys.exit(0)
 
 
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-
-    # Load default user profile BEFORE starting button loop
-    # This ensures the persona manager is set to the correct persona before any sessions start
-    from core.profile_manager import user_manager
-
-    user_manager.load_default_user()
-
-    threading.Thread(target=start_mqtt, daemon=True).start()
     start_motor_watchdog()
     core.button.start_loop()
 
@@ -83,5 +73,4 @@ if __name__ == "__main__":
         from core.movements import cleanup_gpio
 
         cleanup_gpio()
-        stop_mqtt()
         sys.exit(1)

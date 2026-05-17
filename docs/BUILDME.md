@@ -83,7 +83,7 @@ bottom left corner of the board. The 1-4 positions are counted from left to righ
 
 Using distinct jumper wire colors is recommended for easier identification.
 
-There are two selectable wiring profiles (`BILLY_PINS` in .env or via the web UI):
+There are two selectable wiring profiles (`BILLY_PINS` in `.env`):
 - `new` (default, quieter GPIO layout)
 - `legacy` (old wiring)
 

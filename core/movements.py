@@ -233,9 +233,9 @@ def move_head(state="on"):
             except (lgpio.error, Exception):
                 _gpio_active = False
                 return
-        set_pwm(HEAD, 80)
+        set_pwm(HEAD, -80)
         time.sleep(0.5)
-        set_pwm(HEAD, 100)  # stay extended
+        set_pwm(HEAD, -100)  # stay extended
 
     if state == "on":
         if not head_out:
@@ -273,21 +273,12 @@ def move_tail_async(duration=0.3):
 
 def _articulation_multiplier():
     """Return direct articulation multiplier (1 = normal, higher = slower)."""
+    # Persona system removed; use global MOUTH_ARTICULATION from config
     try:
-        # Try to get mouth articulation from current persona
-        from .persona_manager import persona_manager
+        from .config import MOUTH_ARTICULATION
 
-        current_persona_data = persona_manager.get_current_persona_data()
-
-        if current_persona_data and current_persona_data.get('meta', {}).get(
-            'mouth_articulation'
-        ):
-            persona_articulation = current_persona_data['meta']['mouth_articulation']
-            return max(0, min(10, float(persona_articulation)))
-        # Fall back to global setting
-        return 5
-    except Exception as e:
-        # Fall back to global setting on error
+        return max(0, min(10, float(MOUTH_ARTICULATION)))
+    except Exception:
         return 5
 
 

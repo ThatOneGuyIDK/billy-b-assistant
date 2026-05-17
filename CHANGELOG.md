@@ -72,7 +72,7 @@ All notable changes to this project will be documented in this file.
 
 >### ⚠️ For existing builds of Billy
 >
-> **If you're coming from <= v1.4.0:** Please select the Legacy Pin Layout in the Hardware Settings tab of the Web UI if you can't switch to the new unified wiring layout (see [BUILDME.md](./docs/BUILDME.md#from-motor-driver-to-raspberry-pi-gpio-pinout))
+> **If you're coming from <= v1.4.0:** Please select the Legacy Pin Layout in the Hardware Settings section if you can't switch to the new unified wiring layout (see [BUILDME.md](./docs/BUILDME.md#from-motor-driver-to-raspberry-pi-gpio-pinout))
 
 ### Added
 
@@ -90,7 +90,7 @@ All notable changes to this project will be documented in this file.
   - Import/export personas
   - Mid-conversation persona switching with graceful voice changes
   - Persona presets/templates for quick setup
-- **Custom Song Manager**: Web UI for managing custom songs
+- **Custom Song Manager**: Tooling for managing custom songs
   - Upload custom audio files (full.wav, vocals.wav, drums.wav)
   - Configure playback & animation settings (gain, tail threshold, compensate tail, head moves, half tempo tail flap)
   - Set song title and keywords for AI-triggered playback
@@ -127,13 +127,13 @@ All notable changes to this project will be documented in this file.
 
 >### ⚠️ For existing builds of Billy: ⚠️ 
 > 
-> **Please select the Legacy Pin Layout in the Hardware Settings tab of the Web UI if you can't switch to the new unified wiring layout (see [BUILDME.md](./docs/BUILDME.md#from-motor-driver-to-raspberry-pi-gpio-pinout))**
+> **Please select the Legacy Pin Layout in the Hardware Settings section if you can't switch to the new unified wiring layout (see [BUILDME.md](./docs/BUILDME.md#from-motor-driver-to-raspberry-pi-gpio-pinout))**
 
 ### Added
 - **Configurable Pin Layouts:** Introduced `BILLY_PINS` Pin Layout setting (`new` / `legacy`) to switch between the new (default) pin layout and the legacy pin layout (for builds before october '25)
 - **Mouth Articulation Control:** Added `MOUTH_ARTICULATION` (1–10) setting to fine-tune speech motion responsiveness.
 - **Error Sound Handling:**  Centralized error playback — now plays `error.wav`, `noapikey.wav`, or `nowifi.wav` depending on the issue.
-- **Release notes notification:** Notification in the UI with the release notes of the latest version.
+- **Release notes notification:** Notification with the release notes of the latest version.
 
 ### Changed
 - **Unified GPIO Logic:** Refactored motor control for both Modern (2-motor) and Classic (3-motor) models into a single system. Default pin assignments moved to safer GPIOs. Unused H-bridge inputs are now grounded;
@@ -153,7 +153,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **Say command**: Added a MQTT command to let billy announce messages, either as literal sentences or as prompts.
-- **Custom Wake-up Sounds**: Custom Wake-up sounds can now be customised and generated via the UI
+- **Custom Wake-up Sounds**: Custom Wake-up sounds can now be customised and generated locally
 - **New gpt-realtime model**: Added Support for the new stable release of the openAI Realtime API model.
 - **Favicon**: No more 404
 
@@ -169,7 +169,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Shutdown and restart**: Added raspberry pi shutdown and restart buttons in the UI (contribution by @cprasmu )
+- **Shutdown and restart**: Added raspberry pi shutdown and restart controls (contribution by @cprasmu )
 
 ---
 
@@ -178,9 +178,9 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **'Dory' Mode**: Optional single-response mode where Billy answers only once before ending the session. (requested by @kenway33 )
-- **Motor Test UI**: New motor test buttons in the Hardware tab allow triggering mouth and head/tail motion directly from the web interface. (requested by @henrym9)
-- **Hostname + Port Configuration**: Added settings for customizing the device's hostname and Flask web port via UI. (requested by @cprasmu)
-- **Import/Export**: Added ability to upload/download both `.env` and `persona.ini` files from the web UI.
+- **Motor Test controls**: New motor test buttons in the Hardware tab allow triggering mouth and head/tail motion directly. (requested by @henrym9)
+- **Hostname + Port Configuration**: Added settings for customizing the device's hostname and Flask port. (requested by @cprasmu)
+- **Import/Export**: Added ability to upload/download both `.env` and `persona.ini` files.
 
 ### Changed
 
