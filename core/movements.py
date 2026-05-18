@@ -9,6 +9,10 @@ import numpy as np
 
 from .config import (
     BILLY_PINS,
+    HEAD_HOLD_PWM,
+    HEAD_PULSE_RETRIES,
+    HEAD_PULSE_SEC,
+    HEAD_START_PWM,
     INVERT_HEAD_MOUTH,
     MOCKFISH,
     MOTOR_HEAD_GPIO,
@@ -208,6 +212,13 @@ def _drive_head_pwm(duty: int) -> None:
         _pwm[HEAD]["since"] = time.time()
 
 
+def _kick_head(duration: float, start_pwm: int, hold_pwm: int) -> None:
+    """Apply a stronger head pulse with a short kick then hold."""
+    _drive_head_pwm(start_pwm)
+    time.sleep(duration)
+    _drive_head_pwm(hold_pwm)
+
+
 # Claim/initialize
 for pin in motor_pins:
     try:
@@ -377,9 +388,10 @@ def move_head(state="on"):
     def _move_head_on():
         if not _gpio_active:
             return
-        _drive_head_pwm(80)
-        time.sleep(0.5)
-        _drive_head_pwm(100)  # stay extended
+        for attempt in range(max(1, HEAD_PULSE_RETRIES + 1)):
+            _kick_head(HEAD_PULSE_SEC, HEAD_START_PWM, HEAD_HOLD_PWM)
+            if attempt < HEAD_PULSE_RETRIES:
+                time.sleep(0.12)
 
     if state == "on":
         if not head_out:
@@ -432,7 +444,7 @@ def pulse_head(duration=0.14, speed_percent=80):
                     apply_reverse=False,
                 )
             else:
-                _drive_head_pwm(speed_percent)
+                _kick_head(duration, max(speed_percent, HEAD_START_PWM), HEAD_HOLD_PWM)
                 time.sleep(duration)
                 brake_motor(HEAD, None)
 
