@@ -35,7 +35,15 @@ def test_mouth(duration=0.5, speed=80):
 
 
 def test_head(duration=0.6):
-    print(f"Extending HEAD (pin={movements.HEAD}) for {duration}s")
+    drive, idle = movements._head_extend_pins()
+    print(
+        f"Extending HEAD — software HEAD GPIO={movements.HEAD}, "
+        f"drive GPIO={drive}, idle GPIO={idle} — for {duration}s"
+    )
+    from core.config import MOTOR_REVERSE_ALL, MOTOR_REVERSE_HEAD
+
+    if MOTOR_REVERSE_HEAD or MOTOR_REVERSE_ALL:
+        print("  (MOTOR_REVERSE_HEAD/ALL is on — head may drive the tail GPIO on a shared driver)")
     movements.move_head("on")
     time.sleep(duration)
     movements.move_head("off")
@@ -43,7 +51,11 @@ def test_head(duration=0.6):
 
 
 def test_tail(duration=0.5):
-    print(f"Pulsing TAIL (pin={movements.TAIL}) for {duration}s")
+    print(f"Pulsing TAIL (GPIO={movements.TAIL}) for {duration}s")
+    from core.config import BILLY_PINS, is_classic_billy
+
+    if not is_classic_billy() and BILLY_PINS != "legacy":
+        print("  (modern 2-motor: tail shares driver with head — opposite GPIO from head test)")
     movements.move_tail(duration=duration)
     time.sleep(duration + 0.2)
 
@@ -52,7 +64,11 @@ def main():
     print("=== Billy Motor Manual Test ===")
     print("Note: If you are running on a non-Pi or have MOCKFISH=true, motors will be mocked and won't move.")
     print(f"MOCKFISH flag: {movements.MOCKFISH}")
+    from core.config import BILLY_MODEL, is_classic_billy
+
     print(f"Pin mapping -> MOUTH: {movements.MOUTH}, HEAD: {movements.HEAD}, TAIL: {movements.TAIL}")
+    print(f"BILLY_MODEL={BILLY_MODEL} (classic=3 motors, modern=head+tail share one driver)")
+    print(f"Separate tail driver: {is_classic_billy()}")
     print()
 
     pause("Ensure the area is clear and the fish can move freely. Press ENTER to test MOUTH...")

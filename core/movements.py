@@ -15,6 +15,7 @@ from .config import (
     MOTOR_MOUTH_GPIO,
     MOTOR_REVERSE_ALL,
     MOTOR_REVERSE_HEAD,
+    MOTOR_SWAP_HEAD_TAIL,
     MOTOR_TAIL_GPIO,
     is_classic_billy,
 )
@@ -109,6 +110,9 @@ HEAD = _override_gpio(MOTOR_HEAD_GPIO, HEAD)
 MOUTH = _override_gpio(MOTOR_MOUTH_GPIO, MOUTH)
 TAIL = _override_gpio(MOTOR_TAIL_GPIO, TAIL)
 
+if MOTOR_SWAP_HEAD_TAIL:
+    HEAD, TAIL = TAIL, HEAD
+
 # Collect all pins we actually use
 # Allow swapping head <-> mouth mapping via env toggle for mis-wired setups
 if INVERT_HEAD_MOUTH:
@@ -122,7 +126,8 @@ logger.info(
     f"Using third motor: {USE_THIRD_MOTOR} | Pin profile: {BILLY_PINS} | "
     f"MOUTH GPIO {MOUTH} | HEAD GPIO {HEAD} | TAIL GPIO {TAIL}"
     + (" | motors reversed" if MOTOR_REVERSE_ALL else "")
-    + (" | head reversed" if MOTOR_REVERSE_HEAD and not MOTOR_REVERSE_ALL else ""),
+    + (" | head reversed" if MOTOR_REVERSE_HEAD and not MOTOR_REVERSE_ALL else "")
+    + (" | head/tail pins swapped" if MOTOR_SWAP_HEAD_TAIL else ""),
     "⚙️",
 )
 

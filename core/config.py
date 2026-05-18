@@ -51,12 +51,15 @@ TEXT_ONLY_MODE = os.getenv("TEXT_ONLY_MODE", "false").lower() == "true"
 RUN_MODE = os.getenv("RUN_MODE", "normal").lower()
 
 # === Billy Hardware ===
+# modern = head+tail share one driver (2 motors); classic = separate tail driver (3 motors)
 BILLY_MODEL = os.getenv("BILLY_MODEL", "modern").strip().lower()
 BILLY_PINS = os.getenv("BILLY_PINS", "new").strip().lower()
 # Optional per-motor BCM GPIO overrides (see docs/BUILDME.md). Unset = use BILLY_PINS profile.
 MOTOR_HEAD_GPIO = os.getenv("MOTOR_HEAD_GPIO")
 MOTOR_MOUTH_GPIO = os.getenv("MOTOR_MOUTH_GPIO")
 MOTOR_TAIL_GPIO = os.getenv("MOTOR_TAIL_GPIO")
+# Swap head/tail BCM numbers when head test moves the tail (and vice versa)
+MOTOR_SWAP_HEAD_TAIL = os.getenv("MOTOR_SWAP_HEAD_TAIL", "false").lower() == "true"
 
 # === Audio Config ===
 SPEAKER_PREFERENCE = os.getenv("SPEAKER_PREFERENCE")
