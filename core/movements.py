@@ -171,7 +171,12 @@ def _head_extend_pins() -> tuple[int, int | None]:
 
 
 def _drive_head_pwm(duty: int) -> None:
-    """Drive head extend: H-bridge swap when reversed; steady HIGH on single-wire reverse."""
+    """Drive head extend.
+
+    On legacy shared-bridge wiring, `MOTOR_REVERSE_HEAD` swaps the active side.
+    On dedicated head wiring, we keep PWM active; reversing polarity is a
+    hardware-level concern and should not disable the head motor.
+    """
     global _gpio_active
     if not _gpio_active:
         return
@@ -186,14 +191,14 @@ def _drive_head_pwm(duty: int) -> None:
             return
         set_pwm(drive, duty)
         return
-    # Dedicated head wire — reversed: full HIGH avoids PWM buzz on some drivers
+    if _head_reversed():
+        logger.warning(
+            f"Head reverse is enabled on dedicated head GPIO {HEAD}; keeping PWM active instead of forcing a constant level.",
+            "⚠️",
+        )
     clear_pwm(HEAD)
     try:
-        if _head_reversed():
-            lgpio.tx_pwm(h, HEAD, FREQ, 0)
-            lgpio.gpio_write(h, HEAD, 1)
-        else:
-            set_pwm(HEAD, duty)
+        set_pwm(HEAD, duty)
     except (lgpio.error, Exception) as e:
         logger.error(f"Head drive failed on GPIO {HEAD}: {e}", "❌")
         _gpio_active = False
