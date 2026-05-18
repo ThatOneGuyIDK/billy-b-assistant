@@ -146,6 +146,11 @@ def _head_reversed() -> bool:
     return MOTOR_REVERSE_ALL or MOTOR_REVERSE_HEAD
 
 
+def _shares_head_tail_bridge() -> bool:
+    """Legacy 2-motor wiring only: head and tail share a bridge."""
+    return BILLY_PINS == "legacy" and not USE_THIRD_MOTOR
+
+
 def _single_wire_pin(pin: int) -> bool:
     """True when this pin uses active-low reverse (not head — head has its own path)."""
     if _mate_for(pin) is not None:
@@ -376,8 +381,8 @@ def move_head(state="on"):
             threading.Thread(target=_move_head_on, daemon=True).start()
             head_out = True
     else:
-        # Brake both sides of shared bridge where relevant
-        brake_motor(HEAD, TAIL)
+        mate = _mate_for(HEAD)
+        brake_motor(HEAD, mate)
         head_out = False
 
 
@@ -389,16 +394,8 @@ def move_tail(duration=0.2):
       - new    + classic(3): dedicated channel with mate tied to GND => mate = None
       - new    + modern(2):  shared bridge with HEAD => mate = HEAD
     """
-    if BILLY_PINS == "legacy":
-        if USE_THIRD_MOTOR and TAIL is not None and GND_3 is not None:
-            run_motor_async(TAIL, GND_3, speed_percent=80, duration=duration)
-        else:
-            run_motor_async(TAIL, HEAD, speed_percent=80, duration=duration)
-    else:
-        if USE_THIRD_MOTOR:
-            run_motor_async(TAIL, None, speed_percent=80, duration=duration)
-        else:
-            run_motor_async(TAIL, HEAD, speed_percent=80, duration=duration)
+    mate = _mate_for(TAIL)
+    run_motor_async(TAIL, mate, speed_percent=80, duration=duration)
 
 
 def move_tail_async(duration=0.3):
@@ -623,14 +620,15 @@ def _mate_for(pin: int):
         return GND_1
     if pin == HEAD:
         if BILLY_PINS == "legacy":
-            # legacy modern shares bridge with tail
-            return TAIL
-        # new layout: 3-motor => mate hard GND (None); 2-motor => mate is TAIL
-        return None if USE_THIRD_MOTOR else TAIL
+            # legacy 2-motor shares bridge with tail; legacy classic uses a dedicated head mate
+            return TAIL if not USE_THIRD_MOTOR else GND_2
+        # new layout: head is dedicated
+        return None
     if pin == TAIL:
         if BILLY_PINS == "legacy":
             return GND_3 if USE_THIRD_MOTOR else HEAD
-        return None if USE_THIRD_MOTOR else HEAD
+        # new layout: tail is dedicated
+        return None
     return None
 
 
