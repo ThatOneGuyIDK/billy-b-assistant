@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from .dotenv_compat import get_key, set_key
 from .logger import logger
 
 
@@ -132,8 +133,6 @@ class UserProfile:
     def _set_guest_as_default_if_first_time(self):
         """Set guest as default user if this is the first time creating guest.ini."""
         try:
-            from dotenv import get_key, set_key
-
             from .config import ENV_PATH
 
             # Check if DEFAULT_USER is already set to something other than guest

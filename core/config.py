@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-from dotenv import load_dotenv
+from .dotenv_compat import load_dotenv
 
 # Persona system removed: use single prompt file `core/mean_workout_prompt.txt`
 

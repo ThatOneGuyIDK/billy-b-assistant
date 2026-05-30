@@ -29,10 +29,12 @@ def ensure_env_file():
 ensure_env_file()
 
 # --- Now load env ---
-from dotenv import load_dotenv
+from core.dotenv_compat import load_dotenv
 
 
 load_dotenv()
+
+import core.config as config
 
 # --- Imports that might use environment variables ---
 from pathlib import Path
@@ -47,6 +49,25 @@ from core.movements import start_motor_watchdog
 
 current_level = reload_log_level()
 print(f"🔧 Log level set to: {current_level.name}")
+
+
+def log_startup_summary():
+    """Show a compact launch summary so users know what Billy is doing."""
+    logger.info(
+        f"Startup: provider={config.REALTIME_AI_PROVIDER}, model={config.OLLAMA_MODEL}, pins={config.BILLY_PINS}/{config.BILLY_MODEL}",
+        "🐟",
+    )
+    logger.info(
+        f"Head tuning: start={config.HEAD_START_PWM}% hold={config.HEAD_HOLD_PWM}% pulse={config.HEAD_PULSE_SEC:.2f}s retries={config.HEAD_PULSE_RETRIES}",
+        "🎛️",
+    )
+    if config.MOCKFISH:
+        logger.info("Mockfish mode is on: motor motion is simulated.", "🐟")
+    else:
+        logger.info(
+            "Tip: if the head seems weak, tune HEAD_START_PWM, HEAD_HOLD_PWM, or HEAD_PULSE_SEC in .env.",
+            "💡",
+        )
 
 
 def signal_handler(sig, frame):
@@ -65,6 +86,7 @@ def signal_handler(sig, frame):
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    log_startup_summary()
     start_motor_watchdog()
     core.button.start_loop()
 

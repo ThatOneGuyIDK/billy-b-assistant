@@ -22,6 +22,7 @@ from .config import (
     MIC_PREFERENCE,
     PLAYBACK_LATENCY,
     PLAYBACK_VOLUME,
+    TTS_VOICE,
     SPEAKER_PREFERENCE,
     TEXT_ONLY_MODE,
     USE_APLAY,
@@ -565,6 +566,31 @@ def enqueue_wav_to_playback(filepath):
             playback_queue.put(frames)
 
 
+def _load_wake_text_prompts(directory: str) -> list[tuple[str, str]]:
+    """Return (source_file, prompt_text) pairs from all text prompt files in a directory."""
+    prompts: list[tuple[str, str]] = []
+    for path in sorted(glob.glob(os.path.join(directory, "*.txt"))):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    prompts.append((path, line))
+        except Exception as e:
+            logger.warning(f"Failed to read wake-up prompt file {path}: {e}", "⚠️")
+    return prompts
+
+
+def _synthesize_wake_text(prompt: str) -> bytes:
+    """Synthesize a wake-up prompt using the currently configured TTS voice."""
+    from .realtime_ai_provider import voice_provider_registry
+
+    provider = voice_provider_registry.get_provider()
+    voice = TTS_VOICE or getattr(provider, "default_voice", None) or "en_US-lessac-medium"
+    return asyncio.run(provider.generate_audio_clip(prompt=prompt, voice=voice))
+
+
 def enqueue_thinking_tone(duration_ms: int = 140, frequency_hz: float = 420.0):
     """Enqueue a short bubble/plop-like sound used as a 'thinking' indicator."""
     custom_pcm = _load_thinking_sound_pcm()
@@ -596,15 +622,51 @@ def enqueue_thinking_tone(duration_ms: int = 140, frequency_hz: float = 420.0):
 
 
 def play_random_wake_up_clip():
-    """Select and enqueue a random wake-up WAV file with mouth movement."""
-    clips = []
+    """Select and enqueue a wake-up prompt, preferring text that is synthesized in the active voice."""
+    text_prompts = _load_wake_text_prompts(WAKE_UP_DIR)
+    if text_prompts:
+        print("🔧 Using custom wake-up text prompts (custom WAKE_UP_DIR)")
 
-    # Search custom wake-up directory first, fallback to default directory
+    # If no custom text prompts exist, fall back to the default text prompts.
+    if not text_prompts:
+        print("🔁 No custom text prompts found, falling back to default text prompts.")
+        text_prompts = _load_wake_text_prompts(WAKE_UP_DIR_DEFAULT)
+
+    if text_prompts:
+        source_path, prompt = random.choice(text_prompts)
+        already_pending = playback_queue.unfinished_tasks
+        logger.info(
+            f"🔊 Enqueuing wake-up text: {os.path.basename(source_path)}, already_pending={already_pending}",
+            "🔊",
+        )
+
+        audio_bytes = _synthesize_wake_text(prompt)
+        playback_queue.put(audio_bytes)
+
+        time.sleep(0.05)
+
+        new_tasks = playback_queue.unfinished_tasks
+        logger.info(
+            f"🔊 After enqueue: unfinished_tasks={new_tasks} (added {new_tasks - already_pending} chunks)",
+            "🔊",
+        )
+
+        start_time = time.time()
+        while playback_queue.unfinished_tasks > already_pending:
+            time.sleep(0.01)
+
+        elapsed = time.time() - start_time
+        logger.info(f"🔊 Wake-up text playback completed in {elapsed:.2f}s", "🔊")
+
+        playback_done_event.set()
+        logger.info("🔊 playback_done_event SET (wake-up text finished)", "🔊")
+        return prompt
+
+    # Backward-compatible fallback: use legacy WAV clips if no text prompts exist.
     clips = glob.glob(os.path.join(WAKE_UP_DIR, "*.wav"))
     if clips:
         print("🔧 Using custom wake-up clips (custom WAKE_UP_DIR)")
 
-    # If still no clips, fall back to default
     if not clips:
         print("🔁 No custom clips found, falling back to default.")
         clips = glob.glob(os.path.join(WAKE_UP_DIR_DEFAULT, "*.wav"))

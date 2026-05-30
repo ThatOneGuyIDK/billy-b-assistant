@@ -4,7 +4,7 @@ import re
 import wave
 from typing import Optional
 
-from .config import INSTRUCTIONS
+from .config import INSTRUCTIONS, TTS_VOICE
 from .realtime_ai_provider import voice_provider_registry
 
 
@@ -29,8 +29,8 @@ class WakeupClipGenerator:
         if voice:
             self.voice = voice
         else:
-            # Persona system removed — use default voice
-            self.voice = "ballad"
+            # Use the configured TTS voice so cached wakeups match the live voice.
+            self.voice = TTS_VOICE
 
     async def generate(self, prompt: str, index: int) -> str:
         path = os.path.join(WAKEUP_DIR, f"{index}.wav")
