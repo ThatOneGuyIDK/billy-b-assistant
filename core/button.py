@@ -123,21 +123,6 @@ def _preload_runtime_once(force: bool = False):
         _runtime_preloaded = True
 
 
-def _announce_ready_prompt_once():
-    """Speak a short readiness prompt after preload (non-blocking — does not hold the button loop)."""
-    try:
-        from .realtime_ai_provider import voice_provider_registry
-
-        provider = voice_provider_registry.get_provider()
-        audio_bytes = asyncio.run(
-            provider.generate_audio_clip("Press the red button to chat")
-        )
-        if audio_bytes:
-            audio.playback_queue.put(audio_bytes)
-    except Exception as e:
-        logger.warning(f"Could not play startup prompt: {e}", "⚠️")
-
-
 def on_button():
     global \
         is_active, \
@@ -284,15 +269,14 @@ def on_button():
 
 
 def _bootstrap_models_and_prompt():
-    """Load Whisper/TTS and play the startup line without blocking the button loop."""
+    """Load Whisper/TTS without speaking until the system is actually ready."""
     try:
         logger.info(
             "Loading AI models (first Whisper download can take several minutes on the Pi)...",
             "🔧",
         )
         _preload_runtime_once()
-        _announce_ready_prompt_once()
-        logger.success("Models loaded and startup prompt queued.", "✅")
+        logger.success("Models loaded and ready.", "✅")
     except Exception as e:
         logger.error(f"Background model load failed: {e}")
 

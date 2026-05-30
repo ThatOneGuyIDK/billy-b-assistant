@@ -30,12 +30,14 @@ from ..config import (
     TTS_NOISE_SCALE,
     TTS_NOISE_W,
     TTS_SENTENCE_SILENCE,
+    WHISPER_INITIAL_PROMPT,
     WHISPER_BEST_OF,
     WHISPER_BEAM_SIZE,
     WHISPER_VAD_FILTER,
 )
 from ..logger import logger
 from ..realtime_ai_provider import RealtimeAIProvider
+from ..workout_intent import WorkoutIntentResult, route_workout_text
 
 
 def _clean_tts_text(text: str) -> str:
@@ -189,6 +191,62 @@ class LocalSession:
         # Already closed, nothing to wait for
         pass
 
+    def _route_user_text(self, text: str) -> WorkoutIntentResult:
+        """Run a fast workout intent pass before the LLM sees user text."""
+        result = route_workout_text(text)
+        if result.action != "chat":
+            logger.info(
+                f"Workout intent routed as {result.action} (confidence={result.confidence})",
+                "🏋️",
+            )
+        return result
+
+    async def _send_direct_response(self, text: str, voice: Optional[str] = None):
+        """Send a prebuilt assistant response without calling Ollama."""
+        response_text = _clean_tts_text(text)
+        if not response_text:
+            response_text = text
+
+        await self._send_message({
+            "type": "response.created",
+            "response": {"id": "resp_local"},
+        })
+
+        await self._send_message({"type": "response.text.delta", "delta": response_text})
+
+        audio_bytes = await self.provider.generate_audio_clip(
+            response_text,
+            voice=voice or self.voice,
+        )
+
+        chunk_size = 9600
+        for start in range(0, len(audio_bytes), chunk_size):
+            chunk = audio_bytes[start : start + chunk_size]
+            if chunk:
+                await self._send_message(
+                    {
+                        "type": "response.output_audio.delta",
+                        "delta": base64.b64encode(chunk).decode("utf-8"),
+                    }
+                )
+
+        await self._send_message({"type": "response.text.done", "text": response_text})
+        await self._send_message(
+            {
+                "type": "response.done",
+                "response": {"id": "resp_local", "status": "completed"},
+            }
+        )
+
+    async def _run_workout_automation(self, result: WorkoutIntentResult):
+        """Handle instant workout timer/set-counter commands locally."""
+        count = max(1, int(result.target_count or 60))
+        spoken_sequence = result.spoken_sequence or [str(count)]
+
+        intro = "Set counter." if result.action == "set_counter" else "Timer."
+        script = ". ".join([intro, *spoken_sequence])
+        await self._send_direct_response(script)
+
     async def _handle_message(self, payload: dict):
         """Process incoming messages"""
         msg_type = payload.get("type")
@@ -230,13 +288,19 @@ class LocalSession:
                 if text:
                     # Send transcription event
                     logger.info(f"📝 Sending transcription: {text}", "📝")
+                    routed = self._route_user_text(text)
                     await self._send_message({
                         "type": "conversation.item.input_audio_transcription.completed",
                         "transcript": text,
                     })
+
+                    if routed.action in {"timer", "set_counter"}:
+                        asyncio.create_task(self._run_workout_automation(routed))
+                        self.audio_buffer = []
+                        return
                     
                     # Store for LLM
-                    self.conversation_history.append({"role": "user", "content": text})
+                    self.conversation_history.append({"role": "user", "content": routed.normalized_text or text})
                 else:
                     logger.warning("⚠️ Whisper returned empty text", "⚠️")
                 
@@ -255,7 +319,13 @@ class LocalSession:
             for part in content:
                 if part.get("type") == "input_text":
                     text = part.get("text", "")
-                    self.conversation_history.append({"role": "user", "content": text})
+                    routed = self._route_user_text(text)
+                    if routed.action in {"timer", "set_counter"}:
+                        asyncio.create_task(self._run_workout_automation(routed))
+                        return
+                    self.conversation_history.append(
+                        {"role": "user", "content": routed.normalized_text or text}
+                    )
 
     async def _generate_response(self):
         """Generate LLM response using Ollama"""
@@ -751,6 +821,7 @@ class LocalProvider(RealtimeAIProvider):
                     best_of=WHISPER_BEST_OF,
                     temperature=0.0,  # Deterministic output
                     vad_filter=WHISPER_VAD_FILTER,
+                    initial_prompt=WHISPER_INITIAL_PROMPT,
                     condition_on_previous_text=False,  # Don't hallucinate
                 )
 

@@ -4,7 +4,7 @@ import re
 import wave
 from typing import Optional
 
-from .config import INSTRUCTIONS, TTS_VOICE
+from .config import INSTRUCTIONS, TTS_VOICE, WAKEUP_LEAD_IN_MS
 from .realtime_ai_provider import voice_provider_registry
 
 
@@ -51,6 +51,18 @@ class WakeupClipGenerator:
             voice=self.voice,
             instructions=instructions,
         )
+
+        if WAKEUP_LEAD_IN_MS > 0:
+            import numpy as np
+
+            lead_samples = int(24000 * (WAKEUP_LEAD_IN_MS / 1000.0))
+            if lead_samples > 0:
+                audio_bytes = np.concatenate(
+                    [
+                        np.zeros(lead_samples, dtype=np.int16),
+                        np.frombuffer(audio_bytes, dtype=np.int16),
+                    ]
+                ).astype(np.int16).tobytes()
 
         with wave.open(path, "wb") as wf:
             wf.setnchannels(1)

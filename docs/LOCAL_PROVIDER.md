@@ -59,9 +59,12 @@ OLLAMA_NUM_CTX=1536
 OLLAMA_TEMPERATURE=0.4
 
 # Optional: Whisper model size (tiny, base, small, medium, large)
-WHISPER_MODEL=base
-WHISPER_BEAM_SIZE=1
-WHISPER_BEST_OF=1
+WHISPER_MODEL=small
+WHISPER_BEAM_SIZE=5
+WHISPER_BEST_OF=5
+
+# Optional: Bias Whisper toward Billy-related words and reduce wrong transcriptions
+WHISPER_INITIAL_PROMPT=Billy Bass assistant, gym, workout, head, tail, mouth, response, question
 
 # Optional: Delay before the thinking bubble appears
 # Set to 0 to disable it for very fast systems

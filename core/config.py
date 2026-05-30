@@ -24,7 +24,7 @@ except Exception:
 
 # === Local Provider Config ===
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 TTS_VOICE = os.getenv("TTS_VOICE", "en_US-lessac-medium")
 PIPER_MODEL_DIR = os.path.expanduser(
     os.getenv("PIPER_MODEL_DIR", "~/.piper/models")
@@ -32,9 +32,13 @@ PIPER_MODEL_DIR = os.path.expanduser(
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "96"))
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "1536"))
 OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.4"))
-WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "1"))
-WHISPER_BEST_OF = int(os.getenv("WHISPER_BEST_OF", "1"))
+WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "5"))
+WHISPER_BEST_OF = int(os.getenv("WHISPER_BEST_OF", "5"))
 WHISPER_VAD_FILTER = os.getenv("WHISPER_VAD_FILTER", "true").lower() == "true"
+WHISPER_INITIAL_PROMPT = os.getenv(
+    "WHISPER_INITIAL_PROMPT",
+    "Billy Bass assistant, gym, workout, head, tail, mouth, response, question",
+)
 THINKING_SOUND_DELAY_MS = int(os.getenv("THINKING_SOUND_DELAY_MS", "160"))
 
 # === Provider Config ===
@@ -70,9 +74,9 @@ CHUNK_MS = int(os.getenv("CHUNK_MS", "40"))
 PLAYBACK_LATENCY = float(os.getenv("PLAYBACK_LATENCY", "0.5"))  # USB audio buffer latency in seconds (0.5s recommended for Pi)
 USE_APLAY = os.getenv("USE_APLAY", "false").lower()  # "true" = use aplay subprocess, "false" = use sounddevice (default)
 PLAYBACK_VOLUME = float(os.getenv("PLAYBACK_VOLUME", "1.0"))
-TTS_LENGTH_SCALE = float(os.getenv("TTS_LENGTH_SCALE", "1.08"))
-TTS_NOISE_SCALE = float(os.getenv("TTS_NOISE_SCALE", "0.55"))
-TTS_NOISE_W = float(os.getenv("TTS_NOISE_W", "0.7"))
+TTS_LENGTH_SCALE = float(os.getenv("TTS_LENGTH_SCALE", "1.15"))
+TTS_NOISE_SCALE = float(os.getenv("TTS_NOISE_SCALE", "0.50"))
+TTS_NOISE_W = float(os.getenv("TTS_NOISE_W", "0.70"))
 TTS_SENTENCE_SILENCE = float(os.getenv("TTS_SENTENCE_SILENCE", "0.12"))
 TTS_VOCAL_PROCESSING = os.getenv("TTS_VOCAL_PROCESSING", "true").lower() == "true"
 TTS_VOCAL_DARKEN = float(os.getenv("TTS_VOCAL_DARKEN", "0.35"))
@@ -80,6 +84,8 @@ TTS_VOCAL_DRIVE = float(os.getenv("TTS_VOCAL_DRIVE", "0.18"))
 TTS_VOCAL_LOWPASS_HZ = float(os.getenv("TTS_VOCAL_LOWPASS_HZ", "4200"))
 TTS_VOCAL_LIMIT = float(os.getenv("TTS_VOCAL_LIMIT", "0.92"))
 MOUTH_ARTICULATION = int(os.getenv("MOUTH_ARTICULATION", "5"))
+# Wake-up prompts get a small lead-in so the first syllable is not clipped.
+WAKEUP_LEAD_IN_MS = int(os.getenv("WAKEUP_LEAD_IN_MS", "120"))
 # Head drive strength for the motor pulse used in the manual test and speech sync.
 HEAD_START_PWM = int(os.getenv("HEAD_START_PWM", "95"))
 HEAD_HOLD_PWM = int(os.getenv("HEAD_HOLD_PWM", "100"))

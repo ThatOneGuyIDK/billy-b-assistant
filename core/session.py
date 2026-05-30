@@ -28,6 +28,7 @@ from .logger import logger
 from .mic import MicManager
 from .movements import move_tail_async, stop_all_motors
 from .realtime_ai_provider import voice_provider_registry
+from .workout_intent import classify_workout_intent
 
 
 def _get_dynamic_song_description():
@@ -772,6 +773,13 @@ class BillySession:
             # User's speech has been transcribed, now generate LLM response
             transcript = data.get("transcript", "")
             logger.info(f"📝 User said: {transcript}", "📝")
+            workout_intent = classify_workout_intent(transcript)
+            if workout_intent.action in {"timer", "set_counter"}:
+                logger.info(
+                    f"Workout automation handled locally ({workout_intent.action}); skipping LLM turn.",
+                    "🏋️",
+                )
+                return
             # Thinking sound already started earlier
             await self._ws_send_json({"type": "response.create"})
             return

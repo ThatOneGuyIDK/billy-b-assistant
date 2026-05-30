@@ -22,6 +22,7 @@ from .config import (
     MIC_PREFERENCE,
     PLAYBACK_LATENCY,
     PLAYBACK_VOLUME,
+    WAKEUP_LEAD_IN_MS,
     TTS_VOICE,
     SPEAKER_PREFERENCE,
     TEXT_ONLY_MODE,
@@ -566,6 +567,19 @@ def enqueue_wav_to_playback(filepath):
             playback_queue.put(frames)
 
 
+def _prepend_silence(audio_bytes: bytes, lead_in_ms: int) -> bytes:
+    """Prepend a short silence pad to help the first syllable land cleanly."""
+    if lead_in_ms <= 0 or not audio_bytes:
+        return audio_bytes
+
+    lead_samples = int(PROVIDER_OUTPUT_RATE * (lead_in_ms / 1000.0))
+    if lead_samples <= 0:
+        return audio_bytes
+
+    silence = np.zeros(lead_samples, dtype=np.int16).tobytes()
+    return silence + audio_bytes
+
+
 def _load_wake_text_prompts(directory: str) -> list[tuple[str, str]]:
     """Return (source_file, prompt_text) pairs from all text prompt files in a directory."""
     prompts: list[tuple[str, str]] = []
@@ -588,7 +602,8 @@ def _synthesize_wake_text(prompt: str) -> bytes:
 
     provider = voice_provider_registry.get_provider()
     voice = TTS_VOICE or getattr(provider, "default_voice", None) or "en_US-lessac-medium"
-    return asyncio.run(provider.generate_audio_clip(prompt=prompt, voice=voice))
+    audio_bytes = asyncio.run(provider.generate_audio_clip(prompt=prompt, voice=voice))
+    return _prepend_silence(audio_bytes, WAKEUP_LEAD_IN_MS)
 
 
 def enqueue_thinking_tone(duration_ms: int = 140, frequency_hz: float = 420.0):
