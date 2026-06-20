@@ -38,6 +38,7 @@ class SongManager:
                 if song_dir.is_dir():
                     metadata = self.get_song_metadata(song_dir.name, is_custom=True)
                     if metadata:
+                        metadata['is_custom'] = True
                         songs.append(metadata)
                         seen_names.add(song_dir.name)
 
@@ -47,6 +48,7 @@ class SongManager:
                 if song_dir.is_dir() and song_dir.name not in seen_names:
                     metadata = self.get_song_metadata(song_dir.name, is_custom=False)
                     if metadata:
+                        metadata['is_custom'] = False
                         metadata['is_example'] = True
                         songs.append(metadata)
 
@@ -89,6 +91,7 @@ class SongManager:
         metadata = {
             "name": song_name,
             "title": song_name.replace('_', ' ').title(),
+            "is_custom": bool(is_custom),
             "keywords": "",
             "bpm": 120.0,
             "gain": 1.0,

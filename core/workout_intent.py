@@ -7,11 +7,13 @@ utterances, stores memory notes, and returns a cleaned-up prompt for the LLM.
 
 from __future__ import annotations
 
+import random
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from .logger import logger
+from .song_manager import song_manager
 from .profile_manager import user_manager
 
 
@@ -38,6 +40,11 @@ _AUTOMATION_TRIGGERS = (
     "finish workout",
     "set counter",
     "sets",
+)
+_SONG_SPECIFIC_TRIGGERS = (
+    "happy birthday",
+    "play me a song",
+    "play a song",
 )
 _WORKOUT_HINTS = (
     "set",
@@ -69,6 +76,7 @@ class WorkoutIntentResult:
     action: str = "chat"
     confidence: str = "low"
     memory_note: str | None = None
+    song_name: str | None = None
     target_count: int | None = None
     spoken_sequence: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -138,6 +146,50 @@ def _build_set_sequence(count: int) -> list[str]:
     return sequence
 
 
+def _get_available_songs() -> list[dict[str, Any]]:
+    try:
+        return song_manager.list_songs()
+    except Exception as e:
+        logger.warning(f"Failed to load songs for intent routing: {e}", "⚠️")
+        return []
+
+
+def _pick_song_by_title(target_title: str | None = None) -> str | None:
+    songs = _get_available_songs()
+    if not songs:
+        return None
+
+    if target_title:
+        target = target_title.lower()
+        for song in songs:
+            song_name = str(song.get("name", "")).lower()
+            song_title = str(song.get("title", "")).lower()
+            if song_name == target or song_title == target:
+                return song.get("name") or song.get("title")
+
+    return songs[0].get("name") or songs[0].get("title")
+
+
+def _pick_song_for_request(text: str) -> str | None:
+    lowered = text.lower()
+    if any(trigger in lowered for trigger in _SONG_SPECIFIC_TRIGGERS):
+        return _pick_song_by_title("Fishsticks")
+
+    songs = _get_available_songs()
+    if not songs:
+        return None
+
+    chosen_song = random.choice(songs)
+    return chosen_song.get("name") or chosen_song.get("title")
+
+
+def _looks_like_song_request(text: str) -> bool:
+    lowered = text.lower()
+    if any(trigger in lowered for trigger in _SONG_SPECIFIC_TRIGGERS):
+        return True
+    return bool(re.search(r"\bsongs?\b", lowered))
+
+
 def classify_workout_intent(text: str) -> WorkoutIntentResult:
     """Classify a user utterance with a fast deterministic pass."""
     original_text = _clean_text(text)
@@ -158,6 +210,18 @@ def classify_workout_intent(text: str) -> WorkoutIntentResult:
             action="log_memory",
             confidence="high",
             memory_note=note,
+        )
+
+    if _looks_like_song_request(lowered):
+        song_name = _pick_song_for_request(lowered)
+        normalized = f"Song request: {song_name or original_text}"
+        return WorkoutIntentResult(
+            original_text=original_text,
+            normalized_text=normalized,
+            action="song",
+            confidence="high",
+            song_name=song_name,
+            metadata={"song_name": song_name, "song_request": original_text},
         )
 
     if looks_like_automation:

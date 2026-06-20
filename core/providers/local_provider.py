@@ -247,6 +247,18 @@ class LocalSession:
         script = ". ".join([intro, *spoken_sequence])
         await self._send_direct_response(script)
 
+    async def _run_song_automation(self, result: WorkoutIntentResult):
+        """Handle song requests locally before the LLM turn runs."""
+        song_name = result.song_name or result.metadata.get("song_name")
+        if not song_name:
+            logger.warning("Song request detected but no song was selected.")
+            return
+
+        from .. import audio
+
+        logger.info(f"Playing requested song: {song_name}", "🎵")
+        await audio.play_song(song_name)
+
     async def _handle_message(self, payload: dict):
         """Process incoming messages"""
         msg_type = payload.get("type")
@@ -322,6 +334,9 @@ class LocalSession:
                     routed = self._route_user_text(text)
                     if routed.action in {"timer", "set_counter"}:
                         asyncio.create_task(self._run_workout_automation(routed))
+                        return
+                    if routed.action == "song":
+                        asyncio.create_task(self._run_song_automation(routed))
                         return
                     self.conversation_history.append(
                         {"role": "user", "content": routed.normalized_text or text}
