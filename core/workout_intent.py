@@ -170,14 +170,49 @@ def _pick_song_by_title(target_title: str | None = None) -> str | None:
     return songs[0].get("name") or songs[0].get("title")
 
 
+def _match_song_in_text(text: str, songs: list[dict[str, Any]]) -> str | None:
+    """Pick a song whose folder name, title, or keywords appear in the utterance."""
+    lowered = text.lower()
+    best: tuple[int, str] | None = None
+
+    for song in songs:
+        name = str(song.get("name", "")).strip()
+        title = str(song.get("title", "")).strip()
+        keywords = str(song.get("keywords", "")).strip()
+        if not name:
+            continue
+
+        candidates: list[tuple[int, str]] = []
+        name_l = name.lower()
+        if name_l and name_l in lowered:
+            candidates.append((len(name_l), name))
+        title_l = title.lower()
+        if title_l and title_l in lowered:
+            candidates.append((len(title_l), name))
+        for kw in keywords.split(","):
+            kw = kw.strip().lower()
+            if kw and kw in lowered:
+                candidates.append((len(kw), name))
+
+        for score, song_name in candidates:
+            if best is None or score > best[0]:
+                best = (score, song_name)
+
+    return best[1] if best else None
+
+
 def _pick_song_for_request(text: str) -> str | None:
     lowered = text.lower()
-    if any(trigger in lowered for trigger in _SONG_SPECIFIC_TRIGGERS):
-        return _pick_song_by_title("Fishsticks")
-
     songs = _get_available_songs()
     if not songs:
         return None
+
+    matched = _match_song_in_text(lowered, songs)
+    if matched:
+        return matched
+
+    if any(trigger in lowered for trigger in _SONG_SPECIFIC_TRIGGERS):
+        return _pick_song_by_title("fishsticks")
 
     chosen_song = random.choice(songs)
     return chosen_song.get("name") or chosen_song.get("title")

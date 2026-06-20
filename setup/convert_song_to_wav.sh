@@ -11,7 +11,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <input-audio-file> [output-song-dir]"
-  echo "Example: $0 ~/Downloads/blub_blub_jake.mp3 custom_songs/blub_blub_jake"
+  echo "Example: $0 ~/Downloads/blub_blub_jake.mp3 sounds/songs/blub_blub_jake"
   exit 1
 fi
 
@@ -26,7 +26,7 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
   BASE_NAME="$(basename "$INPUT_FILE")"
   BASE_NAME="${BASE_NAME%.*}"
-  OUTPUT_DIR="custom_songs/${BASE_NAME}"
+  OUTPUT_DIR="sounds/songs/${BASE_NAME}"
 fi
 
 if ! command -v ffmpeg >/dev/null 2>&1; then

@@ -1,5 +1,5 @@
 """
-Song Manager - Handles custom song management for Billy Bass
+Song Manager - Handles Billy song library under sounds/songs/
 """
 
 import configparser
@@ -11,87 +11,87 @@ from .logger import logger
 
 
 class SongManager:
-    """Manages custom songs and their metadata."""
+    """Manages songs in sounds/songs/ (legacy custom_songs/ still scanned for migration)."""
 
     def __init__(self):
-        # Get the project root directory (where this file is located)
         project_root = Path(__file__).parent.parent
+        self.songs_dir = project_root / "sounds" / "songs"
+        self.songs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Primary location for custom songs (git ignored)
-        self.custom_songs_dir = project_root / "custom_songs"
-        self.custom_songs_dir.mkdir(parents=True, exist_ok=True)
+        # Deprecated — scanned so existing Pi installs keep working until moved.
+        self.legacy_songs_dir = project_root / "custom_songs"
 
-        # Example songs location (in git)
-        self.example_songs_dir = project_root / "sounds" / "songs"
+    def _song_dirs_to_scan(self) -> list[tuple[Path, str]]:
+        """Return (directory, source_label) pairs in search order."""
+        dirs: list[tuple[Path, str]] = [(self.songs_dir, "sounds/songs")]
+        if self.legacy_songs_dir.exists():
+            dirs.append((self.legacy_songs_dir, "custom_songs"))
+        return dirs
 
-        # For backward compatibility and general operations, use custom_songs as default
-        self.songs_dir = self.custom_songs_dir
+    def _resolve_song_path(self, song_name: str) -> Optional[Path]:
+        for base, _label in self._song_dirs_to_scan():
+            path = base / song_name
+            if path.is_dir():
+                return path
+        return None
+
+    def get_song_directory(self, song_name: str) -> Optional[Path]:
+        """Absolute path to a song folder, or None if not found."""
+        return self._resolve_song_path(song_name)
 
     def list_songs(self) -> list[dict[str, Any]]:
-        """List all available songs with their metadata from both custom and example directories."""
-        songs = []
-        seen_names = set()
+        """List all playable songs from sounds/songs and legacy custom_songs."""
+        songs: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
 
-        # First, get custom songs (priority)
-        if self.custom_songs_dir.exists():
-            for song_dir in self.custom_songs_dir.iterdir():
-                if song_dir.is_dir():
-                    metadata = self.get_song_metadata(song_dir.name, is_custom=True)
-                    if metadata:
-                        metadata['is_custom'] = True
-                        songs.append(metadata)
-                        seen_names.add(song_dir.name)
+        for base, source in self._song_dirs_to_scan():
+            if not base.exists():
+                continue
+            for song_dir in sorted(base.iterdir()):
+                if not song_dir.is_dir():
+                    continue
+                name = song_dir.name
+                if name in seen_names:
+                    continue
+                metadata = self.get_song_metadata(name)
+                if not metadata:
+                    continue
+                if not (
+                    metadata.get("has_full")
+                    or metadata.get("has_vocals")
+                    or metadata.get("has_drums")
+                ):
+                    logger.warning(
+                        f"Skipping song '{name}' in {source}: missing audio stems",
+                        "⚠️",
+                    )
+                    continue
+                metadata["source"] = source
+                metadata["is_legacy"] = source == "custom_songs"
+                songs.append(metadata)
+                seen_names.add(name)
 
-        # Then, get example songs (only if not already in custom)
-        if self.example_songs_dir.exists():
-            for song_dir in self.example_songs_dir.iterdir():
-                if song_dir.is_dir() and song_dir.name not in seen_names:
-                    metadata = self.get_song_metadata(song_dir.name, is_custom=False)
-                    if metadata:
-                        metadata['is_custom'] = False
-                        metadata['is_example'] = True
-                        songs.append(metadata)
-
-        return sorted(songs, key=lambda x: x.get('title', x['name']))
+        return sorted(songs, key=lambda x: x.get("title", x["name"]).lower())
 
     def get_song_metadata(
         self, song_name: str, is_custom: Optional[bool] = None
     ) -> Optional[dict[str, Any]]:
-        """Get metadata for a specific song.
-
-        Args:
-            song_name: Name of the song
-            is_custom: If True, look in custom_songs; if False, look in sounds/songs;
-                      if None, check custom first, then example
-        """
-        if is_custom is None:
-            # Check custom first, then example
-            song_path = self.custom_songs_dir / song_name
-            if not song_path.exists():
-                song_path = self.example_songs_dir / song_name
-                if not song_path.exists():
-                    return None
-        elif is_custom:
-            song_path = self.custom_songs_dir / song_name
-            if not song_path.exists():
-                return None
-        else:
-            song_path = self.example_songs_dir / song_name
-            if not song_path.exists():
-                return None
+        """Get metadata for a specific song (is_custom arg kept for compatibility)."""
+        _ = is_custom
+        song_path = self._resolve_song_path(song_name)
+        if song_path is None:
+            return None
 
         metadata_file = song_path / "metadata.ini"
 
-        # Check for required audio files
         has_full = (song_path / "full.wav").exists()
         has_vocals = (song_path / "vocals.wav").exists()
         has_drums = (song_path / "drums.wav").exists()
 
-        # Default metadata
-        metadata = {
+        metadata: dict[str, Any] = {
             "name": song_name,
-            "title": song_name.replace('_', ' ').title(),
-            "is_custom": bool(is_custom),
+            "title": song_name.replace("_", " ").title(),
+            "is_custom": song_path.parent == self.legacy_songs_dir,
             "keywords": "",
             "bpm": 120.0,
             "gain": 1.0,
@@ -104,74 +104,68 @@ class SongManager:
             "has_drums": has_drums,
         }
 
-        # Load from INI file if it exists
         if metadata_file.exists():
             config = configparser.ConfigParser()
             config.read(metadata_file)
 
-            if config.has_section('SONG'):
-                metadata.update({
-                    "title": config.get('SONG', 'title', fallback=metadata['title']),
-                    "keywords": config.get('SONG', 'keywords', fallback=''),
-                    "bpm": config.getfloat('SONG', 'bpm', fallback=120.0),
-                    "gain": config.getfloat('SONG', 'gain', fallback=1.0),
-                    "tail_threshold": config.getfloat(
-                        'SONG', 'tail_threshold', fallback=1500.0
-                    ),
-                    "compensate_tail": config.getfloat(
-                        'SONG', 'compensate_tail', fallback=0.0
-                    ),
-                    "head_moves": config.get('SONG', 'head_moves', fallback=''),
-                    "half_tempo_tail_flap": config.getboolean(
-                        'SONG', 'half_tempo_tail_flap', fallback=False
-                    ),
-                })
-        # Try to load from old metadata.txt format
+            if config.has_section("SONG"):
+                metadata.update(
+                    {
+                        "title": config.get("SONG", "title", fallback=metadata["title"]),
+                        "keywords": config.get("SONG", "keywords", fallback=""),
+                        "bpm": config.getfloat("SONG", "bpm", fallback=120.0),
+                        "gain": config.getfloat("SONG", "gain", fallback=1.0),
+                        "tail_threshold": config.getfloat(
+                            "SONG", "tail_threshold", fallback=1500.0
+                        ),
+                        "compensate_tail": config.getfloat(
+                            "SONG", "compensate_tail", fallback=0.0
+                        ),
+                        "head_moves": config.get("SONG", "head_moves", fallback=""),
+                        "half_tempo_tail_flap": config.getboolean(
+                            "SONG", "half_tempo_tail_flap", fallback=False
+                        ),
+                    }
+                )
         elif (song_path / "metadata.txt").exists():
-            old_metadata = self._load_old_metadata(song_path / "metadata.txt")
-            metadata.update(old_metadata)
+            metadata.update(self._load_old_metadata(song_path / "metadata.txt"))
 
         return metadata
 
     def _load_old_metadata(self, path: Path) -> dict[str, Any]:
-        """Load metadata from old metadata.txt format."""
-        metadata = {}
-
+        metadata: dict[str, Any] = {}
         with open(path) as f:
             for line in f:
-                if '=' in line:
-                    key, value = line.strip().split('=', 1)
-                    if key == "head_moves":
-                        metadata[key] = value
-                    elif key in ("bpm", "tail_threshold", "gain", "compensate_tail"):
-                        metadata[key] = float(value.strip())
-                    elif key == "half_tempo_tail_flap":
-                        metadata[key] = value.strip().lower() == "true"
-
+                if "=" not in line:
+                    continue
+                key, value = line.strip().split("=", 1)
+                if key == "head_moves":
+                    metadata[key] = value
+                elif key in ("bpm", "tail_threshold", "gain", "compensate_tail"):
+                    metadata[key] = float(value.strip())
+                elif key == "half_tempo_tail_flap":
+                    metadata[key] = value.strip().lower() == "true"
         return metadata
 
     def save_song_metadata(self, song_name: str, metadata: dict[str, Any]) -> bool:
-        """Save metadata for a song in custom_songs."""
-        # Always save to custom_songs
-        song_path = self.custom_songs_dir / song_name
+        song_path = self.songs_dir / song_name
         song_path.mkdir(parents=True, exist_ok=True)
 
         metadata_file = song_path / "metadata.ini"
         config = configparser.ConfigParser()
-
-        config['SONG'] = {
-            'title': metadata.get('title', song_name.replace('_', ' ').title()),
-            'keywords': metadata.get('keywords', ''),
-            'bpm': str(metadata.get('bpm', 120.0)),
-            'gain': str(metadata.get('gain', 1.0)),
-            'tail_threshold': str(metadata.get('tail_threshold', 1500.0)),
-            'compensate_tail': str(metadata.get('compensate_tail', 0.0)),
-            'head_moves': metadata.get('head_moves', ''),
-            'half_tempo_tail_flap': str(metadata.get('half_tempo_tail_flap', False)),
+        config["SONG"] = {
+            "title": metadata.get("title", song_name.replace("_", " ").title()),
+            "keywords": metadata.get("keywords", ""),
+            "bpm": str(metadata.get("bpm", 120.0)),
+            "gain": str(metadata.get("gain", 1.0)),
+            "tail_threshold": str(metadata.get("tail_threshold", 1500.0)),
+            "compensate_tail": str(metadata.get("compensate_tail", 0.0)),
+            "head_moves": metadata.get("head_moves", ""),
+            "half_tempo_tail_flap": str(metadata.get("half_tempo_tail_flap", False)),
         }
 
         try:
-            with open(metadata_file, 'w') as f:
+            with open(metadata_file, "w") as f:
                 config.write(f)
             logger.info(f"Saved metadata for song: {song_name}", "🎵")
             return True
@@ -180,25 +174,21 @@ class SongManager:
             return False
 
     def create_song(self, song_name: str, metadata: dict[str, Any]) -> bool:
-        """Create a new song directory with metadata in custom_songs."""
-        song_path = self.custom_songs_dir / song_name
-
+        song_path = self.songs_dir / song_name
         if song_path.exists():
             logger.warning(f"Song already exists: {song_name}")
             return False
-
         song_path.mkdir(parents=True, exist_ok=True)
         return self.save_song_metadata(song_name, metadata)
 
     def delete_song(self, song_name: str) -> bool:
-        """Delete a song and all its files (only from custom_songs)."""
-        # Only allow deleting custom songs, not examples
-        song_path = self.custom_songs_dir / song_name
-
-        if not song_path.exists():
-            logger.warning(f"Custom song not found: {song_name}")
+        song_path = self._resolve_song_path(song_name)
+        if song_path is None:
+            logger.warning(f"Song not found: {song_name}")
             return False
-
+        if song_path.parent == self.songs_dir and song_name == "fishsticks":
+            logger.warning("Refusing to delete bundled example song: fishsticks")
+            return False
         try:
             shutil.rmtree(song_path)
             logger.info(f"Deleted song: {song_name}", "🗑️")
@@ -208,19 +198,16 @@ class SongManager:
             return False
 
     def save_audio_file(self, song_name: str, file_type: str, file_data: bytes) -> bool:
-        """Save an audio file for a song (full.wav, vocals.wav, or drums.wav) in custom_songs."""
-        if file_type not in ['full', 'vocals', 'drums']:
+        if file_type not in ["full", "vocals", "drums"]:
             logger.error(f"Invalid file type: {file_type}")
             return False
 
-        # Always save to custom_songs
-        song_path = self.custom_songs_dir / song_name
+        song_path = self.songs_dir / song_name
         song_path.mkdir(parents=True, exist_ok=True)
-
         audio_file = song_path / f"{file_type}.wav"
 
         try:
-            with open(audio_file, 'wb') as f:
+            with open(audio_file, "wb") as f:
                 f.write(file_data)
             logger.info(f"Saved {file_type}.wav for song: {song_name}", "🎵")
             return True
@@ -229,75 +216,48 @@ class SongManager:
             return False
 
     def get_audio_file_path(self, song_name: str, file_type: str) -> Optional[Path]:
-        """Get the path to an audio file for a song.
-
-        Args:
-            song_name: Name of the song
-            file_type: Type of audio file ('full', 'vocals', or 'drums')
-
-        Returns:
-            Path to the audio file, or None if not found
-        """
-        if file_type not in ['full', 'vocals', 'drums']:
+        if file_type not in ["full", "vocals", "drums"]:
             return None
-
-        # First check custom_songs
-        custom_path = self.custom_songs_dir / song_name / f"{file_type}.wav"
-        if custom_path.exists():
-            return custom_path
-
-        # Then check example songs
-        example_path = self.example_songs_dir / song_name / f"{file_type}.wav"
-        if example_path.exists():
-            return example_path
-
-        return None
+        song_path = self._resolve_song_path(song_name)
+        if song_path is None:
+            return None
+        audio_file = song_path / f"{file_type}.wav"
+        return audio_file if audio_file.exists() else None
 
     def copy_example_to_custom(
         self, example_name: str, new_name: Optional[str] = None
     ) -> bool:
-        """Copy an example song to custom_songs directory.
-
-        Args:
-            example_name: Name of the example song to copy
-            new_name: Optional new name for the copied song (defaults to example_name)
-        """
+        """Copy a song folder within sounds/songs (kept for API compatibility)."""
         if new_name is None:
             new_name = example_name
 
-        example_path = self.example_songs_dir / example_name
-        custom_path = self.custom_songs_dir / new_name
+        source_path = self._resolve_song_path(example_name)
+        dest_path = self.songs_dir / new_name
 
-        if not example_path.exists():
-            logger.error(f"Example song not found: {example_name}")
+        if source_path is None:
+            logger.error(f"Song not found: {example_name}")
             return False
-
-        if custom_path.exists():
-            logger.warning(f"Custom song already exists: {new_name}")
+        if dest_path.exists():
+            logger.warning(f"Song already exists: {new_name}")
             return False
 
         try:
-            shutil.copytree(example_path, custom_path)
-            logger.info(
-                f"Copied example song '{example_name}' to custom_songs as '{new_name}'",
-                "📋",
-            )
+            shutil.copytree(source_path, dest_path)
+            logger.info(f"Copied song '{example_name}' to '{new_name}'", "📋")
             return True
         except Exception as e:
-            logger.error(f"Failed to copy example song: {e}")
+            logger.error(f"Failed to copy song: {e}")
             return False
 
     def get_dynamic_tool_description(self) -> str:
-        """Generate dynamic tool description based on available songs."""
         songs = self.list_songs()
-
         if not songs:
             return "Plays a special Billy song. No songs are currently available."
 
         song_list = []
         for song in songs:
-            title = song.get('title', song['name'])
-            keywords = song.get('keywords', '')
+            title = song.get("title", song["name"])
+            keywords = song.get("keywords", "")
             if keywords:
                 song_list.append(f"- '{song['name']}' ({title}): {keywords}")
             else:
@@ -307,10 +267,11 @@ class SongManager:
             "Plays a special Billy song based on the given name. Available songs:\n"
         )
         description += "\n".join(song_list)
-        description += "\n\nIMPORTANT: Use the song name (first part in quotes) when calling this function, NOT the title in parentheses."
-
+        description += (
+            "\n\nIMPORTANT: Use the song folder name (first part in quotes) when calling "
+            "this function, NOT the display title in parentheses."
+        )
         return description
 
 
-# Global instance
 song_manager = SongManager()

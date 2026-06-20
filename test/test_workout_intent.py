@@ -33,3 +33,23 @@ def test_song_word_can_pick_a_random_song(monkeypatch):
 
     assert result.action == "song"
     assert result.song_name == "random-song"
+
+
+def test_song_request_matches_keywords(monkeypatch):
+    monkeypatch.setattr(
+        workout_intent.song_manager,
+        "list_songs",
+        lambda: [
+            {"name": "fishsticks", "title": "Fishsticks", "keywords": "kanye"},
+            {
+                "name": "Blub Blub Jake",
+                "title": "Blub Blub Jake",
+                "keywords": "Blub Blub Jake",
+            },
+        ],
+    )
+
+    result = classify_workout_intent("play blub blub jake")
+
+    assert result.action == "song"
+    assert result.song_name == "Blub Blub Jake"

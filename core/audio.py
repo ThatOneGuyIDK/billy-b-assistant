@@ -885,20 +885,20 @@ async def play_song(song_name, interrupt_event=None):
 
     if not song_metadata:
         print(f"❌ Song not found: {song_name}")
-        print(f"💡 Tip: Copy an example song into custom_songs/ over SSH to create new ones")
+        print(f"💡 Add songs under sounds/songs/your_song_name/")
         return
 
-    # Get the actual song directory path using the song name (directory name)
-    actual_song_name = song_metadata['name']
-    if song_metadata.get('is_custom', True):
-        SONG_DIR = f"./custom_songs/{actual_song_name}"
-    else:
-        SONG_DIR = f"./sounds/songs/{actual_song_name}"
+    # Resolve song folder via song manager (sounds/songs, with legacy custom_songs fallback)
+    actual_song_name = song_metadata["name"]
+    song_dir = song_manager.get_song_directory(actual_song_name)
+    if song_dir is None:
+        print(f"❌ Song directory not found: {actual_song_name}")
+        return
+    SONG_DIR = str(song_dir)
 
-    # Double-check the directory exists
-    if not os.path.exists(SONG_DIR):
+    if not os.path.isdir(SONG_DIR):
         print(f"❌ Song directory not found: {SONG_DIR}")
-        print(f"💡 Tip: Copy an example song into custom_songs/ over SSH to create new ones")
+        print(f"💡 Add songs under sounds/songs/your_song_name/ with full.wav, vocals.wav, drums.wav")
         return
 
     MAIN_AUDIO = os.path.join(SONG_DIR, "full.wav")
