@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import threading
@@ -63,14 +65,13 @@ if config.MOCKFISH or not gpiozero_available:
 
     Button = MockButton
 from .movements import move_head
-from .session import BillySession
 
 
 # Button and session globals
 is_active = False
 session_thread = None
 interrupt_event = threading.Event()
-session_instance: BillySession | None = None
+session_instance = None
 last_button_time = 0
 button_debounce_delay = 1.0  # seconds debounce
 session_started_time = 0.0
@@ -240,6 +241,8 @@ def on_button():
             global session_instance, is_active
             try:
                 move_head("on")
+                from .session import BillySession
+
                 # Button mode should be press-to-talk per turn (no auto follow-up mic reopen)
                 session_instance = BillySession(
                     interrupt_event=interrupt_event,
