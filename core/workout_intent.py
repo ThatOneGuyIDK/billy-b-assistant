@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .logger import logger
-from .song_manager import song_manager
+from .song_manager import (
+    match_song_by_wake_phrases,
+    pick_default_song,
+    song_manager,
+)
 from .profile_manager import user_manager
 
 
@@ -41,19 +45,16 @@ _AUTOMATION_TRIGGERS = (
     "set counter",
     "sets",
 )
-_SONG_REQUEST_TRIGGERS = (
-    "happy birthday",
-    "play fishticks",
-    "fishticks",
+# Generic song requests — use default song (metadata.ini default=true)
+_GENERIC_SONG_TRIGGERS = (
     "play me a song",
     "play a song",
+    "play song",
+    "sing me a song",
+    "sing a song",
 )
-# Spoken phrase -> song folder name under sounds/songs/
-_SONG_PHRASE_TO_NAME = {
-    "happy birthday": "Blub Blub Jake",
-    "play fishticks": "fishsticks",
-    "fishticks": "fishsticks",
-}
+
+_SONG_WORD_RE = re.compile(r"\bsongs?\b", re.IGNORECASE)
 _WORKOUT_HINTS = (
     "set",
     "reps",
@@ -162,6 +163,11 @@ def _get_available_songs() -> list[dict[str, Any]]:
         return []
 
 
+def _mentions_song_word(text: str) -> bool:
+    """True if the utterance mentions 'song' or 'songs' anywhere."""
+    return bool(_SONG_WORD_RE.search(text))
+
+
 def _pick_song_by_title(target_title: str | None = None) -> str | None:
     songs = _get_available_songs()
     if not songs:
@@ -175,38 +181,7 @@ def _pick_song_by_title(target_title: str | None = None) -> str | None:
             if song_name == target or song_title == target:
                 return song.get("name") or song.get("title")
 
-    return songs[0].get("name") or songs[0].get("title")
-
-
-def _match_song_in_text(text: str, songs: list[dict[str, Any]]) -> str | None:
-    """Pick a song whose folder name, title, or keywords appear in the utterance."""
-    lowered = text.lower()
-    best: tuple[int, str] | None = None
-
-    for song in songs:
-        name = str(song.get("name", "")).strip()
-        title = str(song.get("title", "")).strip()
-        keywords = str(song.get("keywords", "")).strip()
-        if not name:
-            continue
-
-        candidates: list[tuple[int, str]] = []
-        name_l = name.lower()
-        if name_l and name_l in lowered:
-            candidates.append((len(name_l), name))
-        title_l = title.lower()
-        if title_l and title_l in lowered:
-            candidates.append((len(title_l), name))
-        for kw in keywords.split(","):
-            kw = kw.strip().lower()
-            if kw and kw in lowered:
-                candidates.append((len(kw), name))
-
-        for score, song_name in candidates:
-            if best is None or score > best[0]:
-                best = (score, song_name)
-
-    return best[1] if best else None
+    return pick_default_song(songs)
 
 
 def _pick_song_for_request(text: str) -> str | None:
@@ -215,28 +190,29 @@ def _pick_song_for_request(text: str) -> str | None:
     if not songs:
         return None
 
-    for phrase, song_name in _SONG_PHRASE_TO_NAME.items():
-        if phrase in lowered:
-            resolved = _pick_song_by_title(song_name)
-            if resolved:
-                return resolved
-
-    matched = _match_song_in_text(lowered, songs)
+    matched = match_song_by_wake_phrases(lowered, songs)
     if matched:
         return matched
 
-    if any(trigger in lowered for trigger in ("play me a song", "play a song")):
-        return _pick_song_by_title("fishsticks")
+    if any(trigger in lowered for trigger in _GENERIC_SONG_TRIGGERS):
+        return pick_default_song(songs)
 
-    chosen_song = random.choice(songs)
-    return chosen_song.get("name") or chosen_song.get("title")
+    if _mentions_song_word(lowered):
+        chosen_song = random.choice(songs)
+        return chosen_song.get("name") or chosen_song.get("title")
+
+    return None
 
 
 def _looks_like_song_request(text: str) -> bool:
     lowered = text.lower()
-    if any(trigger in lowered for trigger in _SONG_REQUEST_TRIGGERS):
+    if any(trigger in lowered for trigger in _GENERIC_SONG_TRIGGERS):
         return True
-    return bool(re.search(r"\bsongs?\b", lowered))
+    if _mentions_song_word(lowered):
+        return True
+    if match_song_by_wake_phrases(lowered, _get_available_songs()):
+        return True
+    return False
 
 
 def classify_workout_intent(text: str) -> WorkoutIntentResult:

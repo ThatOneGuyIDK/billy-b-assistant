@@ -53,6 +53,8 @@ cat > "$OUTPUT_DIR/metadata.ini" <<EOF
 [SONG]
 title = $(basename "$OUTPUT_DIR")
 keywords = $(basename "$OUTPUT_DIR")
+wake_words = play $(basename "$OUTPUT_DIR" | tr '[:upper:]' '[:lower:]'), $(basename "$OUTPUT_DIR" | tr '[:upper:]' '[:lower:]')
+default = false
 bpm = 120
 gain = 1.0
 tail_threshold = 1500

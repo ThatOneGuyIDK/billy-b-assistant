@@ -93,6 +93,8 @@ class SongManager:
             "title": song_name.replace("_", " ").title(),
             "is_custom": song_path.parent == self.legacy_songs_dir,
             "keywords": "",
+            "wake_words": "",
+            "default": False,
             "bpm": 120.0,
             "gain": 1.0,
             "tail_threshold": 1500.0,
@@ -113,6 +115,8 @@ class SongManager:
                     {
                         "title": config.get("SONG", "title", fallback=metadata["title"]),
                         "keywords": config.get("SONG", "keywords", fallback=""),
+                        "wake_words": config.get("SONG", "wake_words", fallback=""),
+                        "default": config.getboolean("SONG", "default", fallback=False),
                         "bpm": config.getfloat("SONG", "bpm", fallback=120.0),
                         "gain": config.getfloat("SONG", "gain", fallback=1.0),
                         "tail_threshold": config.getfloat(
@@ -129,6 +133,9 @@ class SongManager:
                 )
         elif (song_path / "metadata.txt").exists():
             metadata.update(self._load_old_metadata(song_path / "metadata.txt"))
+
+        if not metadata.get("wake_words") and metadata.get("keywords"):
+            metadata["wake_words"] = metadata["keywords"]
 
         return metadata
 
@@ -156,6 +163,8 @@ class SongManager:
         config["SONG"] = {
             "title": metadata.get("title", song_name.replace("_", " ").title()),
             "keywords": metadata.get("keywords", ""),
+            "wake_words": metadata.get("wake_words", metadata.get("keywords", "")),
+            "default": str(bool(metadata.get("default", False))).lower(),
             "bpm": str(metadata.get("bpm", 120.0)),
             "gain": str(metadata.get("gain", 1.0)),
             "tail_threshold": str(metadata.get("tail_threshold", 1500.0)),
@@ -257,9 +266,11 @@ class SongManager:
         song_list = []
         for song in songs:
             title = song.get("title", song["name"])
-            keywords = song.get("keywords", "")
-            if keywords:
-                song_list.append(f"- '{song['name']}' ({title}): {keywords}")
+            wake_words = song.get("wake_words") or song.get("keywords", "")
+            if wake_words:
+                song_list.append(
+                    f"- '{song['name']}' ({title}): say any of [{wake_words}]"
+                )
             else:
                 song_list.append(f"- '{song['name']}' ({title})")
 
@@ -275,3 +286,57 @@ class SongManager:
 
 
 song_manager = SongManager()
+
+
+def wake_phrases_for_song(song: dict[str, Any]) -> list[str]:
+    """Spoken phrases that should trigger this song (from metadata.ini wake_words)."""
+    seen: set[str] = set()
+    phrases: list[str] = []
+    for field in ("wake_words", "keywords"):
+        raw = str(song.get(field, "") or "")
+        for part in raw.split(","):
+            phrase = part.strip().lower()
+            if phrase and phrase not in seen:
+                seen.add(phrase)
+                phrases.append(phrase)
+    return phrases
+
+
+def collect_wake_phrase_index(
+    songs: list[dict[str, Any]],
+) -> list[tuple[str, str]]:
+    """(phrase, song_folder_name) pairs, longest phrases first for greedy matching."""
+    index: list[tuple[str, str]] = []
+    for song in songs:
+        name = str(song.get("name", "")).strip()
+        if not name:
+            continue
+        for phrase in wake_phrases_for_song(song):
+            index.append((phrase, name))
+    index.sort(key=lambda item: len(item[0]), reverse=True)
+    return index
+
+
+def match_song_by_wake_phrases(
+    text: str, songs: list[dict[str, Any]]
+) -> str | None:
+    """Return the song folder name if any wake phrase appears in text."""
+    lowered = text.lower()
+    for phrase, song_name in collect_wake_phrase_index(songs):
+        if phrase in lowered:
+            return song_name
+    return None
+
+
+def pick_default_song(songs: list[dict[str, Any]]) -> str | None:
+    """Song marked default=true in metadata.ini, else fishsticks, else first listed."""
+    if not songs:
+        return None
+    for song in songs:
+        if song.get("default"):
+            return song.get("name")
+    for song in songs:
+        if str(song.get("name", "")).lower() == "fishsticks":
+            return song.get("name")
+    return songs[0].get("name")
+
