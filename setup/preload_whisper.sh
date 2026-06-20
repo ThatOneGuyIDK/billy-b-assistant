@@ -12,11 +12,12 @@ fi
 
 # shellcheck disable=SC1091
 source venv/bin/activate
-set -a
-[[ -f .env ]] && source .env
-set +a
 
-MODEL="${WHISPER_MODEL:-base}"
+MODEL="${WHISPER_MODEL:-}"
+if [[ -z "$MODEL" && -f .env ]]; then
+  MODEL="$(grep -E '^WHISPER_MODEL=' .env | head -n 1 | cut -d '=' -f 2-)"
+fi
+MODEL="${MODEL:-base}"
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 
 echo "Downloading Whisper model '${MODEL}' into ${HF_HOME} (can take several minutes)..."
