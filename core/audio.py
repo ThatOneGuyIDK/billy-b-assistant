@@ -68,7 +68,6 @@ PROVIDER_OUTPUT_RATE = 24000
 
 _thinking_sound_cache: bytes | None = None
 _thinking_sound_mtime: float = -1.0
-_song_main_fallback_logged = False
 
 
 def _read_wav_chunk_mono_24k(wf: wave.Wave_read, chunk_frames: int) -> np.ndarray:
@@ -106,44 +105,52 @@ def _pcm_rms(samples: np.ndarray) -> float:
 def _song_playback_mix(
     main: np.ndarray, vocals: np.ndarray, drums: np.ndarray
 ) -> np.ndarray:
-    """Speaker mix: full.wav, or vocals+drums if main stem is silent."""
-    global _song_main_fallback_logged
+    """Speaker mix: always combine all stems (full + vocals + drums)."""
+    lengths = [arr.size for arr in (main, vocals, drums) if arr.size > 0]
+    if not lengths:
+        return np.array([], dtype=np.int16)
 
-    if main.size == 0:
-        base = np.zeros(max(vocals.size, drums.size), dtype=np.int16)
-    else:
-        base = main
-
-    n = min(base.size, vocals.size, drums.size) if vocals.size and drums.size else base.size
-    if n <= 0:
-        return base
-
-    base = base[:n]
-    if _pcm_rms(base) >= 80:
-        return base
-
-    if not _song_main_fallback_logged:
-        logger.warning(
-            "full.wav is very quiet — mixing vocals+drums for speaker output "
-            "(motors still use separate stems)",
-            "🎵",
-        )
-        _song_main_fallback_logged = True
-
-    v = vocals[:n].astype(np.int32)
-    d = drums[:n].astype(np.int32)
-    return np.clip(v + d, -32768, 32767).astype(np.int16)
+    n = min(lengths)
+    m = main[:n].astype(np.int32) if main.size else 0
+    v = vocals[:n].astype(np.int32) if vocals.size else 0
+    d = drums[:n].astype(np.int32) if drums.size else 0
+    return np.clip(m + v + d, -32768, 32767).astype(np.int16)
 
 
 def _write_mono_to_output_stream(stream, mono: np.ndarray, chunk_ms: int) -> None:
-    """Write 24 kHz mono PCM to a 48 kHz stereo sounddevice stream in small chunks."""
+    """Write 24 kHz mono PCM to a 48kHz stereo sounddevice stream in small chunks."""
+    if mono.size == 0:
+        return
     chunk_len = max(1, int(PROVIDER_OUTPUT_RATE * chunk_ms / 1000))
     for i in range(0, len(mono), chunk_len):
         sub = mono[i : i + chunk_len]
         if len(sub) == 0:
             continue
-        stream.write(_resample_24k_mono_to_48k_stereo(sub))
+        try:
+            stream.write(_resample_24k_mono_to_48k_stereo(sub))
+        except Exception as e:
+            logger.error(f"Speaker write failed: {e}", "❌")
+            raise
         time.sleep(0.001)
+
+
+def _song_speaker_pcm(audio_chunk: bytes, flap_chunk: bytes) -> np.ndarray:
+    """Build speaker PCM for a song chunk; fall back to vocals if mix is near-silent."""
+    mono = np.frombuffer(audio_chunk, dtype=np.int16)
+    vocals = np.frombuffer(flap_chunk, dtype=np.int16)
+    if mono.size == 0 and vocals.size > 0:
+        return vocals.copy()
+    if vocals.size == 0:
+        return mono
+    n = min(len(mono), len(vocals))
+    speaker = np.clip(
+        mono[:n].astype(np.int32) + vocals[:n].astype(np.int32),
+        -32768,
+        32767,
+    ).astype(np.int16)
+    if _pcm_rms(speaker) < 200:
+        return vocals[:n].copy()
+    return speaker
 
 
 def _load_thinking_sound_pcm(max_ms: int = 120) -> bytes | None:
@@ -350,7 +357,7 @@ def playback_worker(chunk_ms):
                             drums_peak_time = 0
                             next_beat_time += beat_length
 
-                        mono = np.frombuffer(audio_chunk, dtype=np.int16)
+                        mono = _song_speaker_pcm(audio_chunk, flap_chunk)
                         _write_mono_to_output_stream(stream, mono, chunk_ms)
 
                     elif mode == "tts":
@@ -468,7 +475,7 @@ def playback_worker_aplay(chunk_ms):
                         chunk_ms=chunk_ms,
                     )
 
-                    mono = np.frombuffer(audio_chunk, dtype=np.int16)
+                    mono = _song_speaker_pcm(audio_chunk, flap_chunk)
                     chunk_len = int(PROVIDER_OUTPUT_RATE * chunk_ms / 1000)
                     for i in range(0, len(mono), chunk_len):
                         sub = mono[i : i + chunk_len]
@@ -834,7 +841,13 @@ def reset_for_new_song():
         next_beat_time, \
         drums_peak, \
         drums_peak_time
-    playback_queue.queue.clear()
+    # Drain without leaving orphaned unfinished_tasks (queue.clear() does not task_done).
+    while not playback_queue.empty():
+        try:
+            playback_queue.get_nowait()
+            playback_queue.task_done()
+        except Exception:
+            break
     head_move_queue.queue.clear()
     playback_done_event.clear()
     last_played_time = time.time()
@@ -857,8 +870,7 @@ async def play_song(song_name, interrupt_event=None):
     from core.song_manager import song_manager
 
     reset_for_new_song()
-    global _song_main_fallback_logged
-    _song_main_fallback_logged = False
+    first_speaker_rms: float | None = None
 
     # Use song manager to find the correct song path
     song_metadata = song_manager.get_song_metadata(song_name)
@@ -1056,6 +1068,13 @@ async def play_song(song_name, interrupt_event=None):
                 playback_pcm = _song_playback_mix(
                     samples_main, samples_vocals, samples_drums
                 )
+                if first_speaker_rms is None:
+                    first_speaker_rms = _pcm_rms(playback_pcm)
+                    logger.info(
+                        f"Song speaker mix RMS={first_speaker_rms:.0f} "
+                        f"(mouth stem RMS={_pcm_rms(samples_vocals):.0f})",
+                        "🎵",
+                    )
                 rms_drums = _pcm_rms(samples_drums)
 
                 # --- Enqueue combined chunk
@@ -1067,34 +1086,22 @@ async def play_song(song_name, interrupt_event=None):
                 ))
 
         print("⌛ Waiting for song playback to complete...")
-        # Wait for playback with periodic interrupt checks
-        max_wait_time = 300  # 5 minutes maximum
-        check_interval = 0.5  # Check every 500ms
-        elapsed = 0
-
-        while elapsed < max_wait_time:
-            # Check for interruption
+        drain_start = time.time()
+        while True:
             if interrupt_event and interrupt_event.is_set():
-                print("🛑 Song playback wait interrupted")
-                # Flush remaining queue items
-                while not audio.playback_queue.empty():
-                    try:
-                        audio.playback_queue.get_nowait()
-                        audio.playback_queue.task_done()
-                    except Exception:
-                        break
+                print("🛑 Song playback interrupted")
+                stop_playback()
                 break
-
-            # Check if queue is done
             if (
-                audio.playback_queue.empty()
-                and audio.playback_queue.unfinished_tasks == 0
+                playback_queue.unfinished_tasks == 0
+                and playback_queue.empty()
             ):
                 break
-
-            # Wait a bit before checking again
-            await asyncio.sleep(check_interval)
-            elapsed += check_interval
+            if time.time() - drain_start > 600:
+                logger.warning("Song playback drain timed out", "⚠️")
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.3)  # let USB audio buffer finish
 
     except Exception as e:
         print(f"❌ Playback failed: {e}")
@@ -1102,6 +1109,7 @@ async def play_song(song_name, interrupt_event=None):
     finally:
         audio.song_mode = False
         stop_all_motors()
+        signal_playback_idle()
         print("🎶 Song finished, waiting for button press.")
 
 
