@@ -1,5 +1,6 @@
 [project]
 name = "billy-b-assistant"
+version = "0.1.0"
 
 [tool.ruff]
 # Places ruff should not look
