@@ -41,11 +41,19 @@ _AUTOMATION_TRIGGERS = (
     "set counter",
     "sets",
 )
-_SONG_SPECIFIC_TRIGGERS = (
+_SONG_REQUEST_TRIGGERS = (
     "happy birthday",
+    "play fishticks",
+    "fishticks",
     "play me a song",
     "play a song",
 )
+# Spoken phrase -> song folder name under sounds/songs/
+_SONG_PHRASE_TO_NAME = {
+    "happy birthday": "Blub Blub Jake",
+    "play fishticks": "fishsticks",
+    "fishticks": "fishsticks",
+}
 _WORKOUT_HINTS = (
     "set",
     "reps",
@@ -207,11 +215,17 @@ def _pick_song_for_request(text: str) -> str | None:
     if not songs:
         return None
 
+    for phrase, song_name in _SONG_PHRASE_TO_NAME.items():
+        if phrase in lowered:
+            resolved = _pick_song_by_title(song_name)
+            if resolved:
+                return resolved
+
     matched = _match_song_in_text(lowered, songs)
     if matched:
         return matched
 
-    if any(trigger in lowered for trigger in _SONG_SPECIFIC_TRIGGERS):
+    if any(trigger in lowered for trigger in ("play me a song", "play a song")):
         return _pick_song_by_title("fishsticks")
 
     chosen_song = random.choice(songs)
@@ -220,7 +234,7 @@ def _pick_song_for_request(text: str) -> str | None:
 
 def _looks_like_song_request(text: str) -> bool:
     lowered = text.lower()
-    if any(trigger in lowered for trigger in _SONG_SPECIFIC_TRIGGERS):
+    if any(trigger in lowered for trigger in _SONG_REQUEST_TRIGGERS):
         return True
     return bool(re.search(r"\bsongs?\b", lowered))
 

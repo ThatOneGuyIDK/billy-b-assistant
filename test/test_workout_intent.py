@@ -35,21 +35,37 @@ def test_song_word_can_pick_a_random_song(monkeypatch):
     assert result.song_name == "random-song"
 
 
-def test_song_request_matches_keywords(monkeypatch):
+def test_song_request_matches_happy_birthday(monkeypatch):
     monkeypatch.setattr(
         workout_intent.song_manager,
         "list_songs",
         lambda: [
-            {"name": "fishsticks", "title": "Fishsticks", "keywords": "kanye"},
+            {"name": "fishsticks", "title": "Fishsticks", "keywords": "fishticks"},
             {
                 "name": "Blub Blub Jake",
                 "title": "Blub Blub Jake",
-                "keywords": "Blub Blub Jake",
+                "keywords": "happy birthday",
             },
         ],
     )
 
-    result = classify_workout_intent("play blub blub jake")
+    result = classify_workout_intent("happy birthday")
 
     assert result.action == "song"
     assert result.song_name == "Blub Blub Jake"
+
+
+def test_play_fishticks_uses_fishsticks(monkeypatch):
+    monkeypatch.setattr(
+        workout_intent.song_manager,
+        "list_songs",
+        lambda: [
+            {"name": "fishsticks", "title": "Fishsticks", "keywords": "fishticks"},
+            {"name": "other-song", "title": "Other Song"},
+        ],
+    )
+
+    result = classify_workout_intent("play fishticks")
+
+    assert result.action == "song"
+    assert result.song_name == "fishsticks"
