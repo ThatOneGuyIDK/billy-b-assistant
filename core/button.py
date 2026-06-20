@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import threading
 import time
 from concurrent.futures import CancelledError
+import traceback
 
 from . import audio, config
 from .logger import logger
@@ -13,7 +15,7 @@ from .movements import move_head, move_tail
 
 try:
     # Pi 5 needs lgpio (system: liblgpio-dev) before gpiozero can use the lgpio pin factory
-    import lgpio  # noqa: F401
+    import lgpio  # noqa: F401  # pyright: ignore[reportMissingImports]
 
     import os
 
@@ -241,7 +243,9 @@ def on_button():
             global session_instance, is_active
             try:
                 move_head("on")
-                from .session import BillySession
+
+                session_module = importlib.import_module(".session", __package__)
+                BillySession = session_module.BillySession
 
                 # Button mode should be press-to-talk per turn (no auto follow-up mic reopen)
                 session_instance = BillySession(
@@ -252,6 +256,7 @@ def on_button():
                 asyncio.run(session_instance.start())
             except Exception as e:
                 logger.error(f"Session error: {e}")
+                logger.error(traceback.format_exc())
             finally:
                 move_head("off")
                 is_active = False
