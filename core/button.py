@@ -7,6 +7,7 @@ import threading
 import time
 from concurrent.futures import CancelledError
 import traceback
+import sys
 
 from . import audio, config
 from .logger import logger
@@ -244,8 +245,23 @@ def on_button():
             try:
                 move_head("on")
 
+                session_module_name = f"{__package__}.session"
                 session_module = importlib.import_module(".session", __package__)
-                BillySession = session_module.BillySession
+                BillySession = getattr(session_module, "BillySession", None)
+                if BillySession is None:
+                    logger.warning(
+                        "BillySession missing from cached session module; forcing reload.",
+                        "🔄",
+                    )
+                    sys.modules.pop(session_module_name, None)
+                    importlib.invalidate_caches()
+                    session_module = importlib.import_module(".session", __package__)
+                    BillySession = getattr(session_module, "BillySession", None)
+
+                if BillySession is None:
+                    raise AttributeError(
+                        f"BillySession not found in {session_module_name} after reload"
+                    )
 
                 # Button mode should be press-to-talk per turn (no auto follow-up mic reopen)
                 session_instance = BillySession(
