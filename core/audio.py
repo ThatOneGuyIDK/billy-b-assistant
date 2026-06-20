@@ -68,6 +68,82 @@ PROVIDER_OUTPUT_RATE = 24000
 
 _thinking_sound_cache: bytes | None = None
 _thinking_sound_mtime: float = -1.0
+_song_main_fallback_logged = False
+
+
+def _read_wav_chunk_mono_24k(wf: wave.Wave_read, chunk_frames: int) -> np.ndarray:
+    """Read one chunk from a WAV file as mono int16 at PROVIDER_OUTPUT_RATE (24 kHz)."""
+    raw = wf.readframes(chunk_frames)
+    if not raw:
+        return np.array([], dtype=np.int16)
+
+    if wf.getsampwidth() != 2:
+        logger.warning(
+            f"Unsupported WAV sample width {wf.getsampwidth()} in {getattr(wf, '_file', wf)!r}; expected 16-bit",
+            "⚠️",
+        )
+        return np.array([], dtype=np.int16)
+
+    samples = np.frombuffer(raw, dtype=np.int16)
+    channels = wf.getnchannels()
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
+
+    rate = wf.getframerate()
+    if rate != PROVIDER_OUTPUT_RATE and len(samples) > 0:
+        target_len = max(1, int(len(samples) * PROVIDER_OUTPUT_RATE / rate))
+        samples = resample(samples, target_len).astype(np.int16)
+
+    return samples
+
+
+def _pcm_rms(samples: np.ndarray) -> float:
+    if samples.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+
+
+def _song_playback_mix(
+    main: np.ndarray, vocals: np.ndarray, drums: np.ndarray
+) -> np.ndarray:
+    """Speaker mix: full.wav, or vocals+drums if main stem is silent."""
+    global _song_main_fallback_logged
+
+    if main.size == 0:
+        base = np.zeros(max(vocals.size, drums.size), dtype=np.int16)
+    else:
+        base = main
+
+    n = min(base.size, vocals.size, drums.size) if vocals.size and drums.size else base.size
+    if n <= 0:
+        return base
+
+    base = base[:n]
+    if _pcm_rms(base) >= 80:
+        return base
+
+    if not _song_main_fallback_logged:
+        logger.warning(
+            "full.wav is very quiet — mixing vocals+drums for speaker output "
+            "(motors still use separate stems)",
+            "🎵",
+        )
+        _song_main_fallback_logged = True
+
+    v = vocals[:n].astype(np.int32)
+    d = drums[:n].astype(np.int32)
+    return np.clip(v + d, -32768, 32767).astype(np.int16)
+
+
+def _write_mono_to_output_stream(stream, mono: np.ndarray, chunk_ms: int) -> None:
+    """Write 24 kHz mono PCM to a 48 kHz stereo sounddevice stream in small chunks."""
+    chunk_len = max(1, int(PROVIDER_OUTPUT_RATE * chunk_ms / 1000))
+    for i in range(0, len(mono), chunk_len):
+        sub = mono[i : i + chunk_len]
+        if len(sub) == 0:
+            continue
+        stream.write(_resample_24k_mono_to_48k_stereo(sub))
+        time.sleep(0.001)
 
 
 def _load_thinking_sound_pcm(max_ms: int = 120) -> bytes | None:
@@ -275,7 +351,7 @@ def playback_worker(chunk_ms):
                             next_beat_time += beat_length
 
                         mono = np.frombuffer(audio_chunk, dtype=np.int16)
-                        stream.write(_resample_24k_mono_to_48k_stereo(mono))
+                        _write_mono_to_output_stream(stream, mono, chunk_ms)
 
                     elif mode == "tts":
                         chunk = item[1]
@@ -393,8 +469,13 @@ def playback_worker_aplay(chunk_ms):
                     )
 
                     mono = np.frombuffer(audio_chunk, dtype=np.int16)
-                    stereo = _resample_24k_mono_to_48k_stereo(mono)
-                    audio_buffer.extend(stereo.tobytes())
+                    chunk_len = int(PROVIDER_OUTPUT_RATE * chunk_ms / 1000)
+                    for i in range(0, len(mono), chunk_len):
+                        sub = mono[i : i + chunk_len]
+                        if len(sub) == 0:
+                            continue
+                        stereo = _resample_24k_mono_to_48k_stereo(sub)
+                        audio_buffer.extend(stereo.tobytes())
 
                 elif mode == "tts":
                     chunk = item[1]
@@ -776,6 +857,8 @@ async def play_song(song_name, interrupt_event=None):
     from core.song_manager import song_manager
 
     reset_for_new_song()
+    global _song_main_fallback_logged
+    _song_main_fallback_logged = False
 
     # Use song manager to find the correct song path
     song_metadata = song_manager.get_song_metadata(song_name)
@@ -918,9 +1001,16 @@ async def play_song(song_name, interrupt_event=None):
             rate_vocals = wf_vocals.getframerate()
             rate_drums = wf_drums.getframerate()
 
-            chunk_size_main = int(rate_main * CHUNK_MS / 1000)
-            chunk_size_vocals = int(rate_vocals * CHUNK_MS / 1000)
-            chunk_size_drums = int(rate_drums * CHUNK_MS / 1000)
+            chunk_frames_main = int(rate_main * CHUNK_MS / 1000)
+            chunk_frames_vocals = int(rate_vocals * CHUNK_MS / 1000)
+            chunk_frames_drums = int(rate_drums * CHUNK_MS / 1000)
+
+            logger.info(
+                f"Song stems: full={rate_main}Hz/{wf_main.getnchannels()}ch, "
+                f"vocals={rate_vocals}Hz/{wf_vocals.getnchannels()}ch, "
+                f"drums={rate_drums}Hz/{wf_drums.getnchannels()}ch",
+                "🎵",
+            )
 
             while True:
                 # Check for interruption
@@ -928,51 +1018,50 @@ async def play_song(song_name, interrupt_event=None):
                     print("🛑 Song playback interrupted")
                     break
 
-                frames_main = wf_main.readframes(chunk_size_main)
-                frames_vocals = wf_vocals.readframes(chunk_size_vocals)
-                frames_drums = wf_drums.readframes(chunk_size_drums)
-
-                if not frames_main:
+                samples_main = _read_wav_chunk_mono_24k(wf_main, chunk_frames_main)
+                if samples_main.size == 0:
                     break
 
-                # --- Main audio (24kHz mono)
-                samples_main = np.frombuffer(frames_main, dtype=np.int16)
-                samples_main = samples_main.reshape((-1, 2)).mean(axis=1)
-                if rate_main == 48000:
-                    samples_main = resample(
-                        samples_main, len(samples_main) // 2
-                    ).astype(np.int16)
-                samples_main = np.clip(samples_main * GAIN, -32768, 32767).astype(
-                    np.int16
+                samples_vocals = _read_wav_chunk_mono_24k(wf_vocals, chunk_frames_vocals)
+                samples_drums = _read_wav_chunk_mono_24k(wf_drums, chunk_frames_drums)
+
+                n = len(samples_main)
+                if samples_vocals.size:
+                    n = min(n, len(samples_vocals))
+                if samples_drums.size:
+                    n = min(n, len(samples_drums))
+                if n <= 0:
+                    break
+
+                samples_main = samples_main[:n]
+                samples_vocals = (
+                    samples_vocals[:n]
+                    if samples_vocals.size
+                    else np.zeros(n, dtype=np.int16)
+                )
+                samples_drums = (
+                    samples_drums[:n]
+                    if samples_drums.size
+                    else np.zeros(n, dtype=np.int16)
                 )
 
-                # --- Vocals (for mouth flap)
-                samples_vocals = np.frombuffer(frames_vocals, dtype=np.int16)
-                samples_vocals = samples_vocals.reshape((-1, 2)).mean(axis=1)
-                if rate_vocals == 48000:
-                    samples_vocals = resample(
-                        samples_vocals, len(samples_vocals) // 2
-                    ).astype(np.int16)
+                samples_main = np.clip(samples_main * GAIN, -32768, 32767).astype(np.int16)
                 samples_vocals = np.clip(samples_vocals * GAIN, -32768, 32767).astype(
                     np.int16
                 )
-
-                # --- Drums (for tail flap)
-                samples_drums = np.frombuffer(frames_drums, dtype=np.int16)
-                samples_drums = samples_drums.reshape((-1, 2)).mean(axis=1)
-                if rate_drums == 48000:
-                    samples_drums = resample(
-                        samples_drums, len(samples_drums) // 2
-                    ).astype(np.int16)
                 samples_drums = np.clip(samples_drums * GAIN, -32768, 32767).astype(
                     np.int16
                 )
-                rms_drums = np.sqrt(np.mean(samples_drums.astype(np.float32) ** 2))
+
+                playback_pcm = _song_playback_mix(
+                    samples_main, samples_vocals, samples_drums
+                )
+                rms_drums = _pcm_rms(samples_drums)
 
                 # --- Enqueue combined chunk
                 audio.playback_queue.put((
                     "song",
-                    samples_main.tobytes(),
+                    playback_pcm.tobytes(),
                     samples_vocals.tobytes(),
                     rms_drums,
                 ))
