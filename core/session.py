@@ -111,6 +111,21 @@ class BillySession:
         self._logged_mic_blocked_1 = False
         self._logged_waiting_for_wakeup = False
 
+    def _interrupted(self) -> bool:
+        try:
+            return self.interrupt_event.is_set()
+        except Exception:
+            return False
+
+    async def _wait_for_playback_ready(self) -> None:
+        """Wait for wake-up audio without blocking session interrupt."""
+        if TEXT_ONLY_MODE or audio.playback_done_event.is_set():
+            return
+        while not audio.playback_done_event.is_set():
+            if not self.session_active.is_set() or self._interrupted():
+                return
+            await asyncio.sleep(0.05)
+
     # ---- Websocket helpers ---------------------------------------------
     async def _ws_send_json(self, payload: dict[str, Any]):
         """Send a JSON payload over the session websocket with locking.
@@ -283,7 +298,11 @@ class BillySession:
 
         logger.info(f"Song request routed locally: {song_name}", "🎵")
         await self.stop_session()
+        if self._interrupted():
+            return
         await asyncio.sleep(1.0)
+        if self._interrupted():
+            return
         await audio.play_song(song_name, interrupt_event=self.interrupt_event)
 
     async def _on_tool_args_done(self, data: dict[str, Any]):
@@ -721,8 +740,9 @@ class BillySession:
         audio.send_mic_audio(self.ws, samples, self.loop)
 
     async def run_stream(self):
-        if not TEXT_ONLY_MODE and not audio.playback_done_event.is_set():
-            await asyncio.to_thread(audio.playback_done_event.wait)
+        await self._wait_for_playback_ready()
+        if not self.session_active.is_set() or self._interrupted():
+            return
 
         logger.info(
             "Mic stream active. Say something..."
@@ -738,7 +758,7 @@ class BillySession:
 
             assert self.ws is not None
             async for message in self.ws:
-                if not self.session_active.is_set():
+                if not self.session_active.is_set() or self._interrupted():
                     print("🚪 Session marked as inactive, stopping stream loop.")
                     print()  # Add newline to end the mic volume display line
                     break
@@ -852,7 +872,7 @@ class BillySession:
         logger.info("Mic timeout checker active", "🛡️")
         last_tail_move = 0
 
-        while self.session_active.is_set():
+        while self.session_active.is_set() and not self._interrupted():
             if not self.mic_running:
                 await asyncio.sleep(0.2)
                 continue
@@ -906,7 +926,7 @@ class BillySession:
             print(f"📝 Transcript completed: \"{self.full_response_text.strip()}\"")
         logger.verbose(f"Full response: {self.full_response_text.strip()}", "🧠")
 
-        if not self.session_active.is_set():
+        if not self.session_active.is_set() or self._interrupted():
             print()  # Add newline to end the mic volume display line
             logger.info(
                 "Session inactive after timeout or interruption. Not restarting.", "🚪"
@@ -968,6 +988,10 @@ class BillySession:
         self.session_active.clear()
         self._stop_mic()
 
+        if self.mic_timeout_task and not self.mic_timeout_task.done():
+            self.mic_timeout_task.cancel()
+            self.mic_timeout_task = None
+
         async with self.ws_lock:
             if self.ws:
                 try:
@@ -981,6 +1005,13 @@ class BillySession:
                     logger.warning(f"Error closing provider session: {e}")
                 finally:
                     self.ws = None
+
+        if self.loop:
+            current = asyncio.current_task(self.loop)
+            for task in asyncio.all_tasks(self.loop):
+                if task is current:
+                    continue
+                task.cancel()
 
     async def request_stop(self):
         logger.info("Stop requested via external signal.", "🛑")

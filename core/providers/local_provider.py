@@ -4,6 +4,7 @@ Uses local models for speech-to-text, LLM, and text-to-speech
 """
 import asyncio
 import base64
+import contextlib
 import json
 import re
 from typing import Any, Optional
@@ -148,14 +149,35 @@ class LocalSession:
         self.message_queue = asyncio.Queue()
         self.closed = False
         self._close_sentinel = {"type": "__session_closed__"}
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _track_task(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     async def send(self, message: str):
-        """Receive messages from session.py"""
+        """Receive messages from session.py without blocking on heavy work."""
         try:
             payload = json.loads(message)
-            await self._handle_message(payload)
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON message: {e}")
+            return
+
+        if self.closed:
+            return
+
+        msg_type = payload.get("type")
+        if msg_type in (
+            "input_audio_buffer.commit",
+            "response.create",
+            "conversation.item.create",
+        ):
+            self._track_task(self._handle_message(payload))
+            return
+
+        await self._handle_message(payload)
 
     async def recv(self):
         """Send messages back to session.py"""
@@ -180,6 +202,8 @@ class LocalSession:
     async def close(self):
         """Close the session"""
         self.closed = True
+        for task in list(self._background_tasks):
+            task.cancel()
         # Unblock any pending queue consumers (async for / recv)
         try:
             self.message_queue.put_nowait(self._close_sentinel)
@@ -261,6 +285,9 @@ class LocalSession:
 
     async def _handle_message(self, payload: dict):
         """Process incoming messages"""
+        if self.closed:
+            return
+
         msg_type = payload.get("type")
 
         if msg_type == "session.update":
@@ -295,6 +322,9 @@ class LocalSession:
                 # Transcribe
                 logger.info("🔧 Calling Whisper for transcription...", "🔧")
                 text = await self.provider._speech_to_text(audio_data)
+                if self.closed:
+                    self.audio_buffer = []
+                    return
                 logger.info(f"🔧 Whisper returned: '{text}'", "🔧")
                 
                 if text:
@@ -349,7 +379,7 @@ class LocalSession:
 
     async def _generate_response(self):
         """Generate LLM response using Ollama"""
-        if not self.conversation_history:
+        if self.closed or not self.conversation_history:
             return
 
         # Build messages (TTS optimization prompt removed)
@@ -451,6 +481,12 @@ class LocalSession:
             total_audio_chunks = 0
 
             while True:
+                if self.closed:
+                    producer_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await producer_task
+                    return
+
                 item = await delta_queue.get()
                 if item is stream_done:
                     break
@@ -514,6 +550,8 @@ class LocalSession:
 
     async def _send_message(self, message: dict):
         """Queue a message to send to session.py"""
+        if self.closed:
+            return
         await self.message_queue.put(message)
 
 

@@ -127,6 +127,67 @@ def _preload_runtime_once(force: bool = False):
         _runtime_preloaded = True
 
 
+def _force_cancel_loop_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Cancel all asyncio tasks on a session loop (called from the button thread)."""
+    def _cancel():
+        current = asyncio.current_task(loop)
+        for task in asyncio.all_tasks(loop):
+            if task is not current:
+                task.cancel()
+
+    try:
+        loop.call_soon_threadsafe(_cancel)
+    except Exception as e:
+        logger.warning(f"Could not force-cancel session tasks: {e}", "⚠️")
+
+
+def _stop_active_session() -> bool:
+    """Stop the in-progress session. Returns True when safe to start a new one."""
+    global is_active, session_instance, session_thread
+
+    if not is_active and not (session_thread and session_thread.is_alive()):
+        return True
+
+    logger.info("Button pressed during active session.", "🔁")
+    interrupt_event.set()
+    audio.stop_playback()
+
+    instance = session_instance
+    if instance and getattr(instance, "loop", None):
+        try:
+            logger.info("Stopping active session...", "🛑")
+            with contextlib.suppress(CancelledError):
+                future = asyncio.run_coroutine_threadsafe(
+                    instance.stop_session(), instance.loop
+                )
+                try:
+                    future.result(timeout=3.0)
+                    logger.success("Session stopped.")
+                except TimeoutError:
+                    logger.warning("Session stop timeout, forcing cleanup", "⚠️")
+                    future.cancel()
+                    _force_cancel_loop_tasks(instance.loop)
+        except Exception as e:
+            logger.warning(f"Error stopping session ({type(e)}): {e}", "⚠️")
+
+    is_active = False
+    session_instance = None
+
+    if session_thread and session_thread.is_alive():
+        logger.info("Waiting for session thread to finish...", "⏳")
+        session_thread.join(timeout=3.0)
+        if session_thread.is_alive():
+            logger.warning("Session thread did not finish in time", "⚠️")
+            if instance and getattr(instance, "loop", None):
+                _force_cancel_loop_tasks(instance.loop)
+            session_thread.join(timeout=1.0)
+            with contextlib.suppress(Exception):
+                if _session_start_lock.locked():
+                    _session_start_lock.release()
+
+    return not (session_thread and session_thread.is_alive())
+
+
 def on_button():
     global \
         is_active, \
@@ -143,68 +204,25 @@ def on_button():
         return  # Ignore very quick repeat presses (debounce)
     last_button_time = now
 
-    if is_active:
-        # On real hardware, ignore only very-early presses during startup audio.
-        # This filters accidental bounce/double-presses but still allows a deliberate
-        # second press later to stop the current session.
-        if not config.MOCKFISH and (now - session_started_time) < 2.0:
-            logger.warning("Ignoring button press: session already active", "⚠️")
+    if is_active or (session_thread and session_thread.is_alive()):
+        if not config.MOCKFISH and is_active and (now - session_started_time) < 2.0:
+            logger.warning("Ignoring button press: session just started", "⚠️")
             return
 
-        logger.info("Button pressed during active session.", "🔁")
-        interrupt_event.set()
-        audio.stop_playback()
-
-        if session_instance:
-            try:
-                logger.info("Stopping active session...", "🛑")
-                # A concurrent.futures.CancelledError is expected here, because the last
-                # thing that BillySession.stop_session does is `await asyncio.sleep`,
-                # and that will raise CancelledError because it's a logical place to
-                # stop.
-                with contextlib.suppress(CancelledError):
-                    # Only try to stop if the event loop is initialized
-                    if session_instance.loop:
-                        future = asyncio.run_coroutine_threadsafe(
-                            session_instance.stop_session(), session_instance.loop
-                        )
-                        # Add timeout to prevent hanging
-                        try:
-                            future.result(timeout=5.0)  # Wait up to 5 seconds
-                            logger.success("Session stopped.")
-                        except TimeoutError:
-                            logger.warning("Session stop timeout, forcing cleanup")
-                            future.cancel()
-                    else:
-                        logger.warning("Session loop not yet initialized, skipping async stop")
-            except Exception as e:
-                logger.warning(f"Error stopping session ({type(e)}): {e}")
-            finally:
-                # Always ensure cleanup
-                session_instance = None
-                # Wait for session thread to finish to ensure mic is fully closed
-                if session_thread and session_thread.is_alive():
-                    logger.info("Waiting for session thread to finish...", "⏳")
-                    session_thread.join(timeout=2.0)
-                    if session_thread.is_alive():
-                        logger.warning("Session thread did not finish in time", "⚠️")
-                        # If the session thread is stuck, release start lock so user can start fresh
-                        with contextlib.suppress(Exception):
-                            if _session_start_lock.locked():
-                                _session_start_lock.release()
-        is_active = False  # ✅ Ensure this is always set after stopping
-        # If this was a deliberate press during an active session on real hardware,
-        # continue and start a new session from this same press.
-        if not config.MOCKFISH:
-            restarting_after_stop = True
-
+        restarting_after_stop = True
+        if not _stop_active_session():
+            logger.warning(
+                "Previous session still shutting down; press again in a moment",
+                "⚠️",
+            )
+            return
 
     # Use lock to prevent concurrent session starts (but allow interruption above)
     if not _session_start_lock.acquire(blocking=False):
         acquired_after_wait = False
         if restarting_after_stop:
             # Session thread may still be finalizing; wait briefly so one press can stop+restart.
-            for _ in range(15):  # up to ~1.5s
+            for _ in range(30):  # up to ~3s
                 time.sleep(0.1)
                 if _session_start_lock.acquire(blocking=False):
                     acquired_after_wait = True
