@@ -288,6 +288,35 @@ class BillySession:
             await asyncio.sleep(1.0)
             await audio.play_song(song_name, interrupt_event=self.interrupt_event)
 
+    async def _run_workout_automation(self, result: WorkoutIntentResult):
+        """Speak a timer or set-counter script without calling the LLM."""
+        count = max(1, int(result.target_count or 60))
+        spoken_sequence = result.spoken_sequence or [str(count)]
+        intro = "Set counter." if result.action == "set_counter" else "Timer."
+        script = ". ".join([intro, *spoken_sequence])
+
+        self._stop_thinking_sound()
+        while not audio.playback_queue.empty():
+            try:
+                audio.playback_queue.get_nowait()
+                audio.playback_queue.task_done()
+            except Exception:
+                break
+
+        try:
+            audio_bytes = await self.realtime_ai_provider.generate_audio_clip(script)
+            if not audio_bytes:
+                return
+            chunk_size = 9600
+            for start in range(0, len(audio_bytes), chunk_size):
+                if self._interrupted():
+                    audio.stop_playback()
+                    return
+                audio.playback_queue.put(audio_bytes[start : start + chunk_size])
+            await asyncio.to_thread(audio.playback_queue.join)
+        except Exception as e:
+            logger.warning(f"Workout automation playback failed: {e}", "⚠️")
+
     async def _handle_song_intent(self, workout_intent):
         song_name = workout_intent.song_name or workout_intent.metadata.get(
             "song_name"
@@ -826,6 +855,7 @@ class BillySession:
                     f"Workout automation handled locally ({workout_intent.action}); skipping LLM turn.",
                     "🏋️",
                 )
+                await self._run_workout_automation(workout_intent)
                 return
             if workout_intent.action == "song":
                 await self._handle_song_intent(workout_intent)

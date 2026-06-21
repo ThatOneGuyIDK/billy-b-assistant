@@ -338,10 +338,6 @@ class LocalSession:
                         "song_name": routed.song_name,
                     })
 
-                    if routed.action in {"timer", "set_counter"}:
-                        asyncio.create_task(self._run_workout_automation(routed))
-                        self.audio_buffer = []
-                        return
                     if routed.action == "song":
                         self.audio_buffer = []
                         return

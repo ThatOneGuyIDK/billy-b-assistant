@@ -55,6 +55,16 @@ _GENERIC_SONG_TRIGGERS = (
 )
 
 _SONG_WORD_RE = re.compile(r"\bsongs?\b", re.IGNORECASE)
+_SET_COUNTER_RE = re.compile(
+    r"\b(?:"
+    r"set\s+counter|"
+    r"next\s+set|"
+    r"count(?:ing)?\s+(?:my\s+)?sets?|"
+    r"count\s+\d+\s+sets?|"
+    r"ready\s+set\s+go"
+    r")\b",
+    re.IGNORECASE,
+)
 _WORKOUT_HINTS = (
     "set",
     "reps",
@@ -108,6 +118,32 @@ def _strip_trigger_prefix(text: str) -> str:
         flags=re.IGNORECASE,
     )
     return cleaned.strip()
+
+
+def _normalize_words(text: str) -> str:
+    """Lowercase text with punctuation turned into word breaks."""
+    cleaned = re.sub(r"[^\w\s]", " ", text.lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _looks_like_set_counter_request(text: str) -> bool:
+    """Detect set-counting requests, including noisy Whisper transcripts."""
+    normalized = _normalize_words(text)
+    if not normalized:
+        return False
+    if _SET_COUNTER_RE.search(normalized):
+        return True
+    words = normalized.split()
+    if "count" in words and ("set" in words or "sets" in words):
+        return True
+    if "ready" in words and "set" in words and "go" in words:
+        return True
+    return False
+
+
+def _default_set_count(text: str) -> int:
+    """Default rep/set count when the user did not say a number."""
+    return _extract_count(text) or 10
 
 
 def _looks_like_workout_text(text: str) -> bool:
@@ -246,6 +282,18 @@ def classify_workout_intent(text: str) -> WorkoutIntentResult:
             confidence="high",
             song_name=song_name,
             metadata={"song_name": song_name, "song_request": original_text},
+        )
+
+    if _looks_like_set_counter_request(lowered):
+        count = _default_set_count(lowered)
+        return WorkoutIntentResult(
+            original_text=original_text,
+            normalized_text=f"Set counter request: {original_text}",
+            action="set_counter",
+            confidence="high",
+            target_count=count,
+            spoken_sequence=_build_set_sequence(count),
+            metadata={"count": count},
         )
 
     if looks_like_automation:

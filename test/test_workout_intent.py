@@ -80,6 +80,28 @@ def test_bare_song_word_picks_from_library(monkeypatch):
     assert result.song_name == "other-song"
 
 
+def test_whisper_style_set_counter_phrase():
+    result = classify_workout_intent("count, my, set, go")
+
+    assert result.action == "set_counter"
+    assert result.target_count == 10
+    assert result.spoken_sequence[0] == "up"
+
+
+def test_count_my_sets_with_number():
+    result = classify_workout_intent("count my 5 sets")
+
+    assert result.action == "set_counter"
+    assert result.target_count == 5
+
+
+def test_ready_set_go_triggers_set_counter():
+    result = classify_workout_intent("ready set go")
+
+    assert result.action == "set_counter"
+    assert result.target_count == 10
+
+
 def test_play_song_phrase_picks_from_library(monkeypatch):
     monkeypatch.setattr(
         workout_intent.song_manager,
