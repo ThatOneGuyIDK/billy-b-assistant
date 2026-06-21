@@ -10,6 +10,39 @@ from typing import Any, Optional
 
 from .logger import logger
 
+# ~0.3s of stereo 48 kHz 16-bit audio — catches empty or stub files on the Pi.
+MIN_WAV_BYTES = 32_000
+
+
+def _wav_stem_ok(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size >= MIN_WAV_BYTES
+    except OSError:
+        return False
+
+
+def validate_song_stems(song_path: Path) -> tuple[bool, str]:
+    """Return (ok, error_message). Requires at least one non-empty stem."""
+    stems = {
+        "full.wav": song_path / "full.wav",
+        "vocals.wav": song_path / "vocals.wav",
+        "drums.wav": song_path / "drums.wav",
+    }
+    usable = [name for name, path in stems.items() if _wav_stem_ok(path)]
+    if usable:
+        return True, ""
+    missing = [name for name, path in stems.items() if not path.is_file()]
+    empty = [
+        name
+        for name, path in stems.items()
+        if path.is_file() and not _wav_stem_ok(path)
+    ]
+    if missing:
+        return False, f"missing {', '.join(missing)}"
+    if empty:
+        return False, f"empty or too small: {', '.join(empty)} (run git pull or copy from PC)"
+    return False, "no audio stems found"
+
 
 class SongManager:
     """Manages songs in sounds/songs/ (legacy custom_songs/ still scanned for migration)."""
@@ -62,10 +95,12 @@ class SongManager:
                     or metadata.get("has_vocals")
                     or metadata.get("has_drums")
                 ):
-                    logger.warning(
-                        f"Skipping song '{name}' in {source}: missing audio stems",
-                        "⚠️",
-                    )
+                    ok, reason = validate_song_stems(song_dir)
+                    if not ok:
+                        logger.warning(
+                            f"Skipping song '{name}' in {source}: {reason}",
+                            "⚠️",
+                        )
                     continue
                 metadata["source"] = source
                 metadata["is_legacy"] = source == "custom_songs"
@@ -85,9 +120,9 @@ class SongManager:
 
         metadata_file = song_path / "metadata.ini"
 
-        has_full = (song_path / "full.wav").exists()
-        has_vocals = (song_path / "vocals.wav").exists()
-        has_drums = (song_path / "drums.wav").exists()
+        has_full = _wav_stem_ok(song_path / "full.wav")
+        has_vocals = _wav_stem_ok(song_path / "vocals.wav")
+        has_drums = _wav_stem_ok(song_path / "drums.wav")
 
         metadata: dict[str, Any] = {
             "name": song_name,

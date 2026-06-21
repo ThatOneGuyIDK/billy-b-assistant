@@ -910,6 +910,16 @@ async def play_song(song_name, interrupt_event=None):
     VOCALS_AUDIO = os.path.join(SONG_DIR, "vocals.wav")
     DRUMS_AUDIO = os.path.join(SONG_DIR, "drums.wav")
 
+    from core.song_manager import validate_song_stems
+
+    stems_ok, stems_error = validate_song_stems(song_dir)
+    if not stems_ok:
+        print(f"❌ Song '{actual_song_name}' has no playable audio: {stems_error}")
+        print(f"   Folder: {SONG_DIR}")
+        print("   On the Pi, run: git pull")
+        print(f'   Or from your PC: scp -r "sounds/songs/{actual_song_name}" billy@billy-pi:~/billy-b-assistant/sounds/songs/')
+        return
+
     def load_metadata(song_dir):
         """Load metadata from metadata.ini or fallback to metadata.txt"""
         import configparser
