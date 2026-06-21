@@ -7,7 +7,6 @@ utterances, stores memory notes, and returns a cleaned-up prompt for the LLM.
 
 from __future__ import annotations
 
-import random
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,6 +15,7 @@ from .logger import logger
 from .song_manager import (
     match_song_by_wake_phrases,
     pick_default_song,
+    pick_random_song,
     song_manager,
 )
 from .profile_manager import user_manager
@@ -45,7 +45,7 @@ _AUTOMATION_TRIGGERS = (
     "set counter",
     "sets",
 )
-# Generic song requests — use default song (metadata.ini default=true)
+# Generic song requests — random pick from the full library
 _GENERIC_SONG_TRIGGERS = (
     "play me a song",
     "play a song",
@@ -195,11 +195,10 @@ def _pick_song_for_request(text: str) -> str | None:
         return matched
 
     if any(trigger in lowered for trigger in _GENERIC_SONG_TRIGGERS):
-        return pick_default_song(songs)
+        return pick_random_song(songs)
 
     if _mentions_song_word(lowered):
-        chosen_song = random.choice(songs)
-        return chosen_song.get("name") or chosen_song.get("title")
+        return pick_random_song(songs)
 
     return None
 

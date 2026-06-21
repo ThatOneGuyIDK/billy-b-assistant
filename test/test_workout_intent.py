@@ -2,7 +2,7 @@ from core import workout_intent
 from core.workout_intent import classify_workout_intent
 
 
-def test_play_me_a_song_uses_default_song(monkeypatch):
+def test_play_me_a_song_picks_from_library(monkeypatch):
     monkeypatch.setattr(
         workout_intent.song_manager,
         "list_songs",
@@ -11,11 +11,12 @@ def test_play_me_a_song_uses_default_song(monkeypatch):
             {"name": "other-song", "title": "Other Song", "default": False},
         ],
     )
+    monkeypatch.setattr(workout_intent, "pick_random_song", lambda songs: "other-song")
 
     result = classify_workout_intent("play me a song")
 
     assert result.action == "song"
-    assert result.song_name == "fishsticks"
+    assert result.song_name == "other-song"
 
 
 def test_song_word_can_pick_a_random_song(monkeypatch):
@@ -27,7 +28,7 @@ def test_song_word_can_pick_a_random_song(monkeypatch):
             {"name": "random-song", "title": "Random Song", "wake_words": "random"},
         ],
     )
-    monkeypatch.setattr(workout_intent.random, "choice", lambda items: items[1])
+    monkeypatch.setattr(workout_intent, "pick_random_song", lambda songs: "random-song")
 
     result = classify_workout_intent("song")
 
@@ -71,7 +72,7 @@ def test_bare_song_word_picks_from_library(monkeypatch):
             {"name": "other-song", "title": "Other Song"},
         ],
     )
-    monkeypatch.setattr(workout_intent.random, "choice", lambda items: items[1])
+    monkeypatch.setattr(workout_intent, "pick_random_song", lambda songs: "other-song")
 
     result = classify_workout_intent("Billy Bass assistant, a song")
 
@@ -79,7 +80,7 @@ def test_bare_song_word_picks_from_library(monkeypatch):
     assert result.song_name == "other-song"
 
 
-def test_play_song_phrase_uses_default(monkeypatch):
+def test_play_song_phrase_picks_from_library(monkeypatch):
     monkeypatch.setattr(
         workout_intent.song_manager,
         "list_songs",
@@ -88,8 +89,9 @@ def test_play_song_phrase_uses_default(monkeypatch):
             {"name": "other-song", "title": "Other Song"},
         ],
     )
+    monkeypatch.setattr(workout_intent, "pick_random_song", lambda songs: "other-song")
 
     result = classify_workout_intent("play song")
 
     assert result.action == "song"
-    assert result.song_name == "fishsticks"
+    assert result.song_name == "other-song"

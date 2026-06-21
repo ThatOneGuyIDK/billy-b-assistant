@@ -3,6 +3,7 @@ Song Manager - Handles Billy song library under sounds/songs/
 """
 
 import configparser
+import random
 import shutil
 from pathlib import Path
 from typing import Any, Optional
@@ -326,6 +327,14 @@ def match_song_by_wake_phrases(
         if phrase in lowered:
             return song_name
     return None
+
+
+def pick_random_song(songs: list[dict[str, Any]]) -> str | None:
+    """Pick a random song from the library."""
+    if not songs:
+        return None
+    chosen = random.choice(songs)
+    return chosen.get("name") or chosen.get("title")
 
 
 def pick_default_song(songs: list[dict[str, Any]]) -> str | None:
