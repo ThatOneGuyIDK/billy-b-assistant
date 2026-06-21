@@ -102,19 +102,43 @@ def _pcm_rms(samples: np.ndarray) -> float:
     return float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
 
 
+def _soft_limit_pcm(samples: np.ndarray, ceiling: float = 28000.0) -> np.ndarray:
+    """Scale down peaks before int16 conversion to reduce harsh clipping/buzz."""
+    if samples.size == 0:
+        return samples.astype(np.float32)
+    peak = float(np.max(np.abs(samples)))
+    if peak > ceiling:
+        samples = samples * (ceiling / peak)
+    return samples
+
+
 def _song_playback_mix(
-    main: np.ndarray, vocals: np.ndarray, drums: np.ndarray
+    main: np.ndarray,
+    vocals: np.ndarray,
+    drums: np.ndarray,
+    gain: float = 1.0,
 ) -> np.ndarray:
-    """Speaker mix: always combine all stems (full + vocals + drums)."""
+    """Speaker mix: prefer full stem; light vocal/drum blend only when full is quiet."""
     lengths = [arr.size for arr in (main, vocals, drums) if arr.size > 0]
     if not lengths:
         return np.array([], dtype=np.int16)
 
     n = min(lengths)
-    m = main[:n].astype(np.int32) if main.size else 0
-    v = vocals[:n].astype(np.int32) if vocals.size else 0
-    d = drums[:n].astype(np.int32) if drums.size else 0
-    return np.clip(m + v + d, -32768, 32767).astype(np.int16)
+    m = main[:n].astype(np.float32) if main.size else np.zeros(n, dtype=np.float32)
+    v = vocals[:n].astype(np.float32) if vocals.size else np.zeros(n, dtype=np.float32)
+    d = drums[:n].astype(np.float32) if drums.size else np.zeros(n, dtype=np.float32)
+
+    if _pcm_rms(m.astype(np.int16)) >= 200:
+        mix = m
+    else:
+        mix = v * 0.85 + d * 0.35
+        if _pcm_rms(m.astype(np.int16)) > 50:
+            mix = mix * 0.65 + m * 0.35
+
+    if gain != 1.0:
+        mix *= gain
+    mix = _soft_limit_pcm(mix)
+    return np.clip(mix, -32768, 32767).astype(np.int16)
 
 
 def _write_mono_to_output_stream(stream, mono: np.ndarray, chunk_ms: int) -> None:
@@ -132,25 +156,6 @@ def _write_mono_to_output_stream(stream, mono: np.ndarray, chunk_ms: int) -> Non
             logger.error(f"Speaker write failed: {e}", "❌")
             raise
         time.sleep(0.001)
-
-
-def _song_speaker_pcm(audio_chunk: bytes, flap_chunk: bytes) -> np.ndarray:
-    """Build speaker PCM for a song chunk; fall back to vocals if mix is near-silent."""
-    mono = np.frombuffer(audio_chunk, dtype=np.int16)
-    vocals = np.frombuffer(flap_chunk, dtype=np.int16)
-    if mono.size == 0 and vocals.size > 0:
-        return vocals.copy()
-    if vocals.size == 0:
-        return mono
-    n = min(len(mono), len(vocals))
-    speaker = np.clip(
-        mono[:n].astype(np.int32) + vocals[:n].astype(np.int32),
-        -32768,
-        32767,
-    ).astype(np.int16)
-    if _pcm_rms(speaker) < 200:
-        return vocals[:n].copy()
-    return speaker
 
 
 def _load_thinking_sound_pcm(max_ms: int = 120) -> bytes | None:
@@ -357,7 +362,7 @@ def playback_worker(chunk_ms):
                             drums_peak_time = 0
                             next_beat_time += beat_length
 
-                        mono = _song_speaker_pcm(audio_chunk, flap_chunk)
+                        mono = np.frombuffer(audio_chunk, dtype=np.int16)
                         _write_mono_to_output_stream(stream, mono, chunk_ms)
 
                     elif mode == "tts":
@@ -475,7 +480,7 @@ def playback_worker_aplay(chunk_ms):
                         chunk_ms=chunk_ms,
                     )
 
-                    mono = _song_speaker_pcm(audio_chunk, flap_chunk)
+                    mono = np.frombuffer(audio_chunk, dtype=np.int16)
                     chunk_len = int(PROVIDER_OUTPUT_RATE * chunk_ms / 1000)
                     for i in range(0, len(mono), chunk_len):
                         sub = mono[i : i + chunk_len]
@@ -1057,31 +1062,30 @@ async def play_song(song_name, interrupt_event=None):
                     else np.zeros(n, dtype=np.int16)
                 )
 
-                samples_main = np.clip(samples_main * GAIN, -32768, 32767).astype(np.int16)
-                samples_vocals = np.clip(samples_vocals * GAIN, -32768, 32767).astype(
-                    np.int16
-                )
-                samples_drums = np.clip(samples_drums * GAIN, -32768, 32767).astype(
-                    np.int16
-                )
+                samples_vocals_motor = np.clip(
+                    samples_vocals.astype(np.float32) * GAIN, -32768, 32767
+                ).astype(np.int16)
+                samples_drums_motor = np.clip(
+                    samples_drums.astype(np.float32) * GAIN, -32768, 32767
+                ).astype(np.int16)
 
                 playback_pcm = _song_playback_mix(
-                    samples_main, samples_vocals, samples_drums
+                    samples_main, samples_vocals, samples_drums, gain=GAIN
                 )
                 if first_speaker_rms is None:
                     first_speaker_rms = _pcm_rms(playback_pcm)
                     logger.info(
                         f"Song speaker mix RMS={first_speaker_rms:.0f} "
-                        f"(mouth stem RMS={_pcm_rms(samples_vocals):.0f})",
+                        f"(mouth stem RMS={_pcm_rms(samples_vocals_motor):.0f})",
                         "🎵",
                     )
-                rms_drums = _pcm_rms(samples_drums)
+                rms_drums = _pcm_rms(samples_drums_motor)
 
                 # --- Enqueue combined chunk
                 audio.playback_queue.put((
                     "song",
                     playback_pcm.tobytes(),
-                    samples_vocals.tobytes(),
+                    samples_vocals_motor.tobytes(),
                     rms_drums,
                 ))
 
@@ -1114,7 +1118,10 @@ async def play_song(song_name, interrupt_event=None):
 
 
 def _resample_24k_mono_to_48k_stereo(mono: np.ndarray) -> np.ndarray:
-    """Resample 24kHz mono int16 -> 48kHz stereo int16 with volume applied."""
-    resampled = resample(mono, int(len(mono) * 48000 / 24000)).astype(np.int16)
-    stereo = np.repeat(resampled[:, np.newaxis], 2, axis=1)
-    return np.clip(stereo * PLAYBACK_VOLUME, -32768, 32767).astype(np.int16)
+    """Upsample 24 kHz mono int16 -> 48 kHz stereo int16 with volume applied."""
+    if mono.size == 0:
+        return np.zeros((0, 2), dtype=np.int16)
+    scaled = mono.astype(np.float32) * PLAYBACK_VOLUME
+    upsampled = _soft_limit_pcm(np.repeat(scaled, 2))
+    stereo = np.column_stack((upsampled, upsampled))
+    return np.clip(stereo, -32768, 32767).astype(np.int16)
